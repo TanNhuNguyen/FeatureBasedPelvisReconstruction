@@ -120,42 +120,99 @@ python script.py [StartFeatSelStratIndex] [EndFeatSelStratIndex] [StartValidInde
 #### `featureToPelvisStructureRecon_radialBasicFunctionInterpolation_BoneStructures()`
 #### `featureToPelvisStructureRecon_radialBasicFunctionInterpolation_BoneMuscleStructures()`
 
-Non-rigid deformation using RBF interpolation for smooth anatomical reconstruction.
+Non-rigid deformation using RBF interpolation for smooth anatomical reconstruction. These functions extend the affine transformation approach by adding radial basis function interpolation for final mesh deformation, providing more accurate local anatomical details.
+
+**Process:**
+1. Apply rigid SVD and affine CPD transformations (similar to affine method)
+2. Use RBF interpolation to deform the template mesh to match target feature points
+3. Compute feature displacement vectors for improved reconstruction accuracy
 
 ### 3. Shape Optimization Strategy
 
 #### `featureToPelvisStructureRecon_shapeOptimizationStrategy_BoneStructures()`
 #### `featureToPelvisStructureRecon_shapeOptimizationStrategy_BoneMuscleStructures()`
 
-Optimizes shape parameters to minimize feature reconstruction error.
+Optimizes shape parameters to minimize feature reconstruction error using PCA-based statistical shape models.
+
+**Command Line Usage:**
+```bash
+python script.py [StartFeatSelStratIndex] [EndFeatSelStratIndex] [StartValidIndex] [EndValidIndex] [StartNumComps] [EndNumComps]
+```
+
+**Key Features:**
+- Statistical shape modeling using PCA decomposition
+- Optimization-based parameter estimation
+- Barycentric coordinate-based feature point computation
+- Multiple component analysis for optimal dimensionality
 
 ### 4. Shape Relation Strategy (Primary Method)
 
-#### Core Training Functions:
-- `featureToPelvisStructureRecon_shapeRelationStrategy_BoneAndMuscleStructures_multivarirateLinearRegression()`
-- `featureToPelvisStructureRecon_shapeRelationStrategy_BoneAndMuscleStructures_RidgeLinearRegression()`
-- `featureToPelvisStructureRecon_shapeRelationStrategy_BoneAndMuscleStructures_CanonicalCorrelationAnalysis()`
-- `featureToPelvisStructureRecon_shapeRelationStrategy_BoneAndMuscleStructures_PartialLeastSquaresRegression()`
-- `featureToPelvisStructureRecon_shapeRelationStrategy_BoneAndMuscleStructures_GaussianProcessRegressor()`
-- `featureToPelvisStructureRecon_shapeRelationStrategy_BoneAndMuscleStructures_MultiOutputRegressor()`
+The shape relation strategy uses machine learning models to establish statistical relationships between anatomical feature points and pelvis structure parameters.
 
-#### Analysis and Optimization:
-- `featureToPelvisStructureRecon_shapeRelationStrategy_BoneAndMuscleStructures_MultiOutputRegressor_trainValidationVariousFeatures()`
-- `featureToPelvisStructureRecon_shapeRelationStrategy_BoneAndMuscleStructures_MultiOutputRegressor_determineOptimalNumComponents()`
-- `featureToPelvisStructureRecon_shapeRelationStrategy_BoneAndMuscleStructures_MultiOutputRegressor_testUsingOptimalNumComponents()`
+#### Core Regression Models:
 
-#### Visualization and Evaluation:
-- `featureToPelvisStructureRecon_shapeRelationStrategy_BoneAndMuscleStructures_MultiOutputRegressor_drawTestingErrors()`
-- `featureToPelvisStructureRecon_shapeRelationStrategy_BoneAndMuscleStructures_MultiOutputRegressor_computeVariousTestingErrors()`
-- `featureToPelvisStructureRecon_shapeRelationStrategy_BoneAndMuscleStructures_MultiOutputRegressor_estimateBestAndWorstPredictedCases()`
-- `featureToPelvisStructureRecon_shapeRelationStrategy_BoneAndMuscleStructures_MultiOutputRegressor_visualizeBestWorstPredictedCases()`
-- `featureToPelvisStructureRecon_shapeRelationStrategy_BoneAndMuscleStructures_MultiOutputRegressor_visualizeBestWorstPredictedCasesWithCTImageScans()`
+##### `featureToPelvisStructureRecon_shapeRelationStrategy_BoneStructures()`
+Basic shape relation approach for bone-only structures.
 
-### 5. Strategy Selection
+##### `featureToPelvisStructureRecon_shapeRelationStrategy_BoneAndMuscleStructures_multivarirateLinearRegression()`
+Implements multivariate linear regression for feature-to-structure mapping.
+
+##### `featureToPelvisStructureRecon_shapeRelationStrategy_BoneAndMuscleStructures_RidgeLinearRegression()`
+Uses Ridge regression with L2 regularization to prevent overfitting and improve generalization.
+
+##### `featureToPelvisStructureRecon_shapeRelationStrategy_BoneAndMuscleStructures_CanonicalCorrelationAnalysis()`
+Employs Canonical Correlation Analysis (CCA) to find linear relationships between feature sets and shape parameters.
+
+##### `featureToPelvisStructureRecon_shapeRelationStrategy_BoneAndMuscleStructures_PartialLeastSquaresRegression()`
+Implements Partial Least Squares (PLS) regression for dimensionality reduction and prediction.
+
+##### `featureToPelvisStructureRecon_shapeRelationStrategy_BoneAndMuscleStructures_GaussianProcessRegressor()`
+Advanced non-parametric regression using Gaussian Process models for uncertainty quantification.
+
+##### `featureToPelvisStructureRecon_shapeRelationStrategy_BoneAndMuscleStructures_MultiOutputRegressor()`
+Multi-output regression wrapper that can be applied to various base regressors for comprehensive shape prediction.
+
+#### Advanced Analysis and Optimization Functions:
+
+##### `featureToPelvisStructureRecon_shapeRelationStrategy_BoneAndMuscleStructures_MultiOutputRegressor_trainValidationVariousFeatures()`
+Comprehensive training and validation across multiple feature selection strategies to identify optimal anatomical landmark combinations.
+
+##### `featureToPelvisStructureRecon_shapeRelationStrategy_BoneAndMuscleStructures_MultiOutputRegressor_determineOptimalNumComponents()`
+Automatically determines the optimal number of PCA components for shape representation through systematic evaluation.
+
+##### `featureToPelvisStructureRecon_shapeRelationStrategy_BoneAndMuscleStructures_MultiOutputRegressor_testUsingOptimalNumComponents()`
+Performs final testing using the previously determined optimal number of components for unbiased performance evaluation.
+
+#### Comprehensive Evaluation and Visualization:
+
+##### `featureToPelvisStructureRecon_shapeRelationStrategy_BoneAndMuscleStructures_MultiOutputRegressor_drawTestingErrors()`
+Generates comprehensive error visualization plots for testing results analysis.
+
+##### `featureToPelvisStructureRecon_shapeRelationStrategy_BoneAndMuscleStructures_MultiOutputRegressor_computeVariousTestingErrors()`
+Computes multiple error metrics including point-to-point distances, feature alignment errors, and mesh quality measures.
+
+##### `featureToPelvisStructureRecon_shapeRelationStrategy_BoneAndMuscleStructures_MultiOutputRegressor_drawTestingErrorsInVariousMetrics()`
+Creates detailed error analysis plots across different evaluation metrics for comprehensive performance assessment.
+
+##### `featureToPelvisStructureRecon_shapeRelationStrategy_BoneAndMuscleStructures_MultiOutputRegressor_estimateBestAndWorstPredictedCases()`
+Identifies the best and worst performing cases from the test set for detailed analysis and quality assurance.
+
+##### `featureToPelvisStructureRecon_shapeRelationStrategy_BoneAndMuscleStructures_MultiOutputRegressor_visualizeBestWorstPredictedCases()`
+Provides 3D visualization of the best and worst predicted cases for qualitative assessment.
+
+##### `featureToPelvisStructureRecon_shapeRelationStrategy_BoneAndMuscleStructures_MultiOutputRegressor_visualizeBestWorstPredictedCasesWithCTImageScans()`
+Advanced visualization that overlays predicted results with original CT scan data for clinical validation.
+
+### 5. Strategy Selection and Comparison
 
 #### `featureToPelvisStructureRecon_selectOptimalReconstructionStrategy()`
 
-Compares all reconstruction approaches and selects the optimal method based on validation performance.
+Comprehensive comparison framework that evaluates all reconstruction approaches and selects the optimal method based on cross-validation performance. This function provides systematic comparison across:
+- Affine transform-based deformation
+- Radial basis function interpolation  
+- Statistical shape optimization
+- Various shape relation strategies
+- Different regression models (Linear, Ridge, CCA, PLS, Gaussian Process)
 
 ---
 
