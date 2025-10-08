@@ -245,16 +245,7 @@ featureToPelvisStructureRecon_shapeRelationStrategy_BoneAndMuscleStructures_Mult
 
 ## Data Organization
 
-### Camera Configuration
-```python
-cameraIntrinsicMatrix = np.array([[1185.7,   0,   960,  0],
-                                  [   0, 1185.7,  540,  0],
-                                  [   0,   0,     1,    0],
-                                  [   0,   0,     0,    1]])
-```
-
 ### Key Data Paths
-- **Main Database:** `H:/Data/PelvisBoneRecon/SystemDataBase/SystemDatabase.h5`
 - **Cross-Validation:** `H:/Data/PelvisBoneRecon/CrossValidation/`
 - **Debug Output:** `H:/Data/PelvisBoneRecon/Debugs/`
 
