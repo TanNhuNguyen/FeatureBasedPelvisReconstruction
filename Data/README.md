@@ -21,30 +21,27 @@ After downloading the ZIP file:
    - On macOS: Double-click the ZIP file to unzip.
    - On Linux:
      ```bash
-     unzip PelvisReconstructionData.zip
+     unzip Data.zip
      ```
 
 2. **Place the extracted folders** inside your project’s `./Data` directory:
    ```
    ./Data/
-   ├── PelvisBoneRecon/
-   └── Template/
+   └── PelvisBoneRecon/
    ```
 
 3. Ensure your working directory includes the following subfolders (used by the code):
    ```
    ./Data/
-   ├── Template/
-   ├── PelvisBoneRecon/
-		├──CrossValidation
-			├──AffineDeformation
-			├──AugmentedTestingIDs
-			├──FeatureSelectionProtocol
-			├──RadialBasicFunctionStrategy
-			├──ShapeRelationStrategy
-			└──TrainingValidTestingIDs
-		├──Debugs
-		└──FemalePelvisGeometries
+      ├── PelvisBoneRecon/
+         ├──CrossValidation
+            ├──FeatureSelectionProtocol
+            └──TrainingValidTestingIDs
+         └──FemalePelvisGeometries
+            └──PersonalizedPelvisStructures
+      └──Template
+         └──PelvisBonesMuscles
+            └──FeatureSelectionProtocol
    ```
 
 ---
@@ -59,29 +56,25 @@ Contains the core data used for model training, validation, and analysis.
 
 Used for evaluating model performance across different strategies and data splits.
 
-- `AffineDeformation/`: Saving the pelvic reconstruction results using the affine transform strategy.
-- `AugmentedTestingIDs/`: IDs of samples used for testing with data augmentation.
-- `FeatureSelectionProtocol/`: Feature selection strategies and metadata.
-- `RadialBasicFunctionStrategy/`:  Saving the pelvic reconstruction results using the radial basis function strategy.
-- `ShapeOptimizationStrategy/`: Saving the pelvic reconstruction results using the shape optimization strategy.
-- `ShapeRelationStrategy/`: Saving the pelvic reconstruction results using the shape relation strategy.
+- `FeatureSelectionProtocol/`: Feature selection strategies, bary centric, and bary coordinates of the feature points.
 - `TrainingValidTestingIDs/`: Lists of IDs for training, validation, and testing splits.
-
-#### `Debugs/`
-
-Contains debug outputs such as camera positions, intermediate visualizations, and logs captured during calibration and reconstruction.
 
 #### `FemalePelvisGeometries/`
 
 Stores anatomical geometry data for female pelvis models.
 
 - `PersonalizedPelvisStructures/`: Individualized 3D pelvis reconstructions.
-- `ShapeVariationAnalyses/`: Statistical shape analysis results across subjects.
-
----
 
 ### `Template/`
 
-Includes template models and reference geometries used for registration and alignment during reconstruction.
+Contains the template structure of the pelvic bone and muscles, including all ROI vertex, faces, and vertex indices of each pelvic region.
+
+#### `PelvisBonesMuscles/`
+
+Contains the files of *.csv for saving the vertex indices for each of pelvic bone structure, *.ply file for saving the template pelvic structure mesh, and the *.pp file containing the feature points of the pelvic structure in each reigon of interest parts.
+
+##### `FeatureSelectionProtocol/`
+
+Contains the feature selection protocals as well as the bary centric coordinate and bary facet indices for studying the relationship between the feature points and pelvic structures.
 
 ---

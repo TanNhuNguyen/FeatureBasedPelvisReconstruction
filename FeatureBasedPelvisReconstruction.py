@@ -1,24 +1,9 @@
 #************************************************************ SUPPORTING LIBRARIES
 import os;
-import gc;
 import numpy as np;
-import time;
 import sys;
-import cv2;
-import glob;
-import pymeshlab;
-import pydicom;
-from tqdm import tqdm;
-import SimpleITK as sitk
 import matplotlib.pyplot as plt;
 import trimesh;
-import random;
-import re;
-import zipfile;
-import shutil;
-import pickle;
-import pyvista as pv;
-from scipy.spatial import KDTree;
 from scipy.interpolate import RBFInterpolator;
 from scipy.optimize import least_squares;
 from sklearn.decomposition import PCA;
@@ -30,3405 +15,22 @@ from sklearn.gaussian_process import GaussianProcessRegressor;
 from sklearn.multioutput import MultiOutputRegressor
 from sklearn.linear_model import RidgeCV
 from sklearn.gaussian_process.kernels import RBF;
-from sklearn.mixture import GaussianMixture;
-from sklearn.decomposition import KernelPCA
-from sklearn.model_selection import GridSearchCV
 from sklearn.preprocessing import StandardScaler;
 import matplotlib.pyplot as plt;
 from matplotlib.font_manager import FontProperties;
-import matplotlib.ticker as ticker;
 
 import SupportingTools.SupportingTools as sp;
 import VisualInterface.VisualInterface as vi;
-from SMPLBody.SMPLBody import SmplBodyModel;
-from SkeletonPredictor.SkeletonPredictor import SkeletonPredictor;
-from SKELPredictor.SKELPredictor import SKELPredictor;
-from PelvicBoneReconGUI.SystemDatabaseManager import SystemDatabaseManager;
 
 import warnings
 warnings.filterwarnings("ignore")
 
 #************************************************************ SUPPORTING BUFFERS
-mainFolder = "./";
-dataFolder = mainFolder + "/Data";
-rawDataFolder = dataFolder + "/Raw";
-processedDataFolder = dataFolder + "/Processed";
-postProcessedDataFolder = dataFolder + "/PostProcessed";
-fineProcessedDataFolder = dataFolder + "/FineProcessed";
-templateDataFolder = dataFolder + "/Template";
-debugFolder = dataFolder + "/Debugs";
-virtualCalibFolder = dataFolder + "/VirtualCalib";
-virtualCalibDataFolder = virtualCalibFolder + "/CalibData";
-virtualCalibResultFolder = virtualCalibFolder + "/CalibResults";
-fusionDataFolder = virtualCalibFolder + "/FusionData";
-fusionResultFolder = virtualCalibFolder + "/FusionResults";
 viewer = vi.VisualInterface();
-visionSeparation = 0.05;
-capturingIndex = 0;
-cameraIntrinsicMatrix = np.array([[1185.7,   0,   960,  0],
-                                        [   0, 1185.7,  540,  0],
-                                        [   0,   0,     1,    0],
-                                        [   0,   0,     0,    1]    ]);
-leftCameraName, rightCameraName, centerCameraName, upperCameraName, lowerCameraName = "leftCamera", "rightCamera", "centerCamera", "upperCamera", "lowerCamera";
+disk = "H:";
 
-#************************************************************ SUPPORTING FUNCTIONS
-def isTopLeft(corners):
-        first_point = corners[0][0]
-        mean_x = np.mean(corners[:, 0, 0])
-        mean_y = np.mean(corners[:, 0, 1])
-        return first_point[0] < mean_x and first_point[1] < mean_y
-def keyBoardCallBack(key):
-    # Set the global variables
-    global capturingIndex;
-    criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 30, 0.001);
-
-    # Capture position of the center camera
-    if (key == 'p'):
-        centerCamPosition = viewer.getCameraPosition("centerCamera");
-        centerCamFocalPoint = viewer.getCameraFocalPoint("centerCamera");
-        centerCamViewUp = viewer.getCameraViewUp("centerCamera");
-        centerCamPosData = np.array([centerCamPosition, centerCamFocalPoint, centerCamViewUp]);
-        sp.saveMatrixToCSVFile(debugFolder + "/centerCamPosData.csv", centerCamPosData)
-
-    # Capture all images
-    if (key == 'a'):
-        print("Capturing image: ", capturingIndex);
-
-        # Capture the image
-        centerImage = viewer.captureCameraScreen("centerCamera", 1920, 1080);
-        leftImage = viewer.captureCameraScreen("leftCamera", 1920, 1080);
-        rightImage = viewer.captureCameraScreen("rightCamera", 1920, 1080);
-        upperImage = viewer.captureCameraScreen("upperCamera", 1920, 1080);
-        lowerImage = viewer.captureCameraScreen("lowerCamera", 1920, 1080);
-
-        # Checking the chessboard detection in each image
-        centerGrayImage = cv2.cvtColor(centerImage, cv2.COLOR_BGR2GRAY);
-        leftGrayImage = cv2.cvtColor(leftImage, cv2.COLOR_BGR2GRAY);
-        rightGrayImage = cv2.cvtColor(rightImage, cv2.COLOR_BGR2GRAY);
-        upperGrayImage = cv2.cvtColor(upperImage, cv2.COLOR_BGR2GRAY);
-        lowerGrayImage = cv2.cvtColor(lowerImage, cv2.COLOR_BGR2GRAY);
-
-        boardSize = (9, 7);
-        ret1, corners1 = cv2.findChessboardCorners(centerGrayImage, boardSize, None);
-        ret2, corners2 = cv2.findChessboardCorners(leftGrayImage, boardSize, None);
-        ret3, corner3 = cv2.findChessboardCorners(rightGrayImage, boardSize, None);
-        ret4, corner4 = cv2.findChessboardCorners(upperGrayImage, boardSize, None);
-        ret5, corner5 = cv2.findChessboardCorners(lowerGrayImage, boardSize, None);
-
-        if not (ret1 and ret2 and ret3 and ret4 and ret5):
-            print("\t Cannot capture chessboard.");
-            return;
-        topLeft1 = isTopLeft(corners1);
-        topLeft2 = isTopLeft(corners2);
-        topLeft3 = isTopLeft(corner3);
-        topLeft4 = isTopLeft(corner4);
-        topLeft5 = isTopLeft(corner5);
-        if not (topLeft1 and topLeft2 and topLeft3 and topLeft4 and topLeft5):
-            print("\t The chessboards are not in the same direction.");
-            return;
-
-        # Save the image
-        targetFolder = fusionDataFolder;
-        leftImageFolder = targetFolder + "/LeftImages";
-        rightImageFolder = targetFolder + "/RightImages";
-        centerImageFolder = targetFolder + "/CenterImages";
-        upperImageFolder = targetFolder + "/UpperImages";
-        lowerImageFolder = targetFolder + "/LowerImages";
-
-        sp.saveImage(centerImageFolder + f"/centerImage_{capturingIndex}.png", centerImage);
-        sp.saveImage(leftImageFolder + f"/leftImage_{capturingIndex}.png", leftImage);
-        sp.saveImage(rightImageFolder + f"/rightImage_{capturingIndex}.png", rightImage);
-        sp.saveImage(upperImageFolder + f"/upperImage_{capturingIndex}.png", upperImage);
-        sp.saveImage(lowerImageFolder + f"/lowerImage_{capturingIndex}.png", lowerImage);
-
-        # Increase the capturing index
-        capturingIndex = capturingIndex + 1;
-
-    # Capture center images
-    if (key == 'b'):
-        print("Capturing image: ", capturingIndex);
-
-        # Checking image
-        centerImage = viewer.captureCameraScreen("centerCamera", 1920, 1080);
-        imageFolder = virtualCalibDataFolder + "/MonoCalibImages/CenterImages"; 
-        imagePrefix = "centerImage";
-
-        # Checking images
-        firstGrayImage = cv2.cvtColor(centerImage, cv2.COLOR_BGR2GRAY);
-        boardSize = (9, 7);
-        ret1, corners1 = cv2.findChessboardCorners(firstGrayImage, boardSize, None);
-        if not (ret1): 
-            print("\t Cannot detect chessboard.");
-            return;
-        corners1 = cv2.cornerSubPix(firstGrayImage, corners1, (11, 11), (-1, -1), criteria)
-        if not (corners1[0][0][0] < np.mean(corners1[:, 0, 0]) and corners1[0][0][1] < np.mean(corners1[:, 0, 1])): 
-            print("\t Cannot find the same direction.");
-            return;
-
-        # Capture the image                     
-        sp.saveImage(imageFolder + f"/{imagePrefix}_{capturingIndex}.png", centerImage);
-
-        # Increase the capturing index
-        capturingIndex = capturingIndex + 1;
-
-    # Capture left image
-    if (key == 'c'):
-        print("Capturing image: ", capturingIndex);
-
-        # Checking image
-        centerImage = viewer.captureCameraScreen("leftCamera", 1920, 1080);
-        imageFolder = virtualCalibDataFolder + "/MonoCalibImages/LeftImages"; 
-        imagePrefix = "leftImage";
-
-        # Checking images
-        firstGrayImage = cv2.cvtColor(centerImage, cv2.COLOR_BGR2GRAY);
-        boardSize = (9, 7);
-        ret1, corners1 = cv2.findChessboardCorners(firstGrayImage, boardSize, None);
-        if not (ret1): 
-            print("\t Cannot detect chessboard.");
-            return;
-        corners1 = cv2.cornerSubPix(firstGrayImage, corners1, (11, 11), (-1, -1), criteria)
-        if not (corners1[0][0][0] < np.mean(corners1[:, 0, 0]) and corners1[0][0][1] < np.mean(corners1[:, 0, 1])): 
-            print("\t Cannot find the same direction.");
-            return;
-
-        # Capture the image                     
-        sp.saveImage(imageFolder + f"/{imagePrefix}_{capturingIndex}.png", centerImage);
-
-        # Increase the capturing index
-        capturingIndex = capturingIndex + 1;
-
-    # Capture right image
-    if (key == 'd'):
-        print("Capturing image: ", capturingIndex);
-
-        # Checking image
-        centerImage = viewer.captureCameraScreen("rightCamera", 1920, 1080);
-        imageFolder = virtualCalibDataFolder + "/MonoCalibImages/RightImages"; 
-        imagePrefix = "rightImage";
-
-        # Checking images
-        firstGrayImage = cv2.cvtColor(centerImage, cv2.COLOR_BGR2GRAY);
-        boardSize = (9, 7);
-        ret1, corners1 = cv2.findChessboardCorners(firstGrayImage, boardSize, None);
-        if not (ret1): 
-            print("\t Cannot detect chessboard.");
-            return;
-        corners1 = cv2.cornerSubPix(firstGrayImage, corners1, (11, 11), (-1, -1), criteria)
-        if not (corners1[0][0][0] < np.mean(corners1[:, 0, 0]) and corners1[0][0][1] < np.mean(corners1[:, 0, 1])): 
-            print("\t Cannot find the same direction.");
-            return;
-
-        # Capture the image                     
-        sp.saveImage(imageFolder + f"/{imagePrefix}_{capturingIndex}.png", centerImage);
-
-        # Increase the capturing index
-        capturingIndex = capturingIndex + 1;
-
-    # Capture upper image
-    if (key == 'e'):
-        print("Capturing image: ", capturingIndex);
-
-        # Checking image
-        centerImage = viewer.captureCameraScreen("upperCamera", 1920, 1080);
-        imageFolder = virtualCalibDataFolder + "/MonoCalibImages/UpperImages"; 
-        imagePrefix = "upperImage";
-
-        # Checking images
-        firstGrayImage = cv2.cvtColor(centerImage, cv2.COLOR_BGR2GRAY);
-        boardSize = (9, 7);
-        ret1, corners1 = cv2.findChessboardCorners(firstGrayImage, boardSize, None);
-        if not (ret1): 
-            print("\t Cannot detect chessboard.");
-            return;
-        corners1 = cv2.cornerSubPix(firstGrayImage, corners1, (11, 11), (-1, -1), criteria)
-        if not (corners1[0][0][0] < np.mean(corners1[:, 0, 0]) and corners1[0][0][1] < np.mean(corners1[:, 0, 1])): 
-            print("\t Cannot find the same direction.");
-            return;
-
-        # Capture the image                     
-        sp.saveImage(imageFolder + f"/{imagePrefix}_{capturingIndex}.png", centerImage);
-
-        # Increase the capturing index
-        capturingIndex = capturingIndex + 1;
-
-    # Capture lower image
-    if (key == 'f'):
-        print("Capturing image: ", capturingIndex);
-
-        # Checking image
-        centerImage = viewer.captureCameraScreen("lowerCamera", 1920, 1080);
-        imageFolder = virtualCalibDataFolder + "/MonoCalibImages/LowerImages"; 
-        imagePrefix = "lowerImage";
-
-        # Checking images
-        firstGrayImage = cv2.cvtColor(centerImage, cv2.COLOR_BGR2GRAY);
-        boardSize = (9, 7);
-        ret1, corners1 = cv2.findChessboardCorners(firstGrayImage, boardSize, None);
-        if not (ret1): 
-            print("\t Cannot detect chessboard.");
-            return;
-        corners1 = cv2.cornerSubPix(firstGrayImage, corners1, (11, 11), (-1, -1), criteria)
-        if not (corners1[0][0][0] < np.mean(corners1[:, 0, 0]) and corners1[0][0][1] < np.mean(corners1[:, 0, 1])): 
-            print("\t Cannot find the same direction.");
-            return;
-
-        # Capture the image                     
-        sp.saveImage(imageFolder + f"/{imagePrefix}_{capturingIndex}.png", centerImage);
-
-        # Increase the capturing index
-        capturingIndex = capturingIndex + 1;
-    
-    # Capture left right image
-    if (key == 'g'):
-        print("Capturing image: ", capturingIndex);
-        criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 30, 0.001);
-
-        # Capture the image
-        leftImage = viewer.captureCameraScreen("leftCamera", 1920, 1080);
-        rightImage = viewer.captureCameraScreen("rightCamera", 1920, 1080);
-
-        # Checking images
-        firstGrayImage = cv2.cvtColor(leftImage, cv2.COLOR_BGR2GRAY);
-        secondGrayImage = cv2.cvtColor(rightImage, cv2.COLOR_BGR2GRAY);
-        boardSize = (9, 7);
-        ret1, corners1 = cv2.findChessboardCorners(firstGrayImage, boardSize, None);
-        ret2, corners2 = cv2.findChessboardCorners(secondGrayImage, boardSize, None);
-        if not (ret1 and ret2): 
-            print("\t Cannot detect chessboard.");
-            return;
-        corners1 = cv2.cornerSubPix(firstGrayImage, corners1, (11, 11), (-1, -1), criteria)
-        corners2 = cv2.cornerSubPix(secondGrayImage, corners2, (11, 11), (-1, -1), criteria)
-        if not (corners1[0][0][0] < np.mean(corners1[:, 0, 0]) and corners1[0][0][1] < np.mean(corners1[:, 0, 1]) and
-                    corners2[0][0][0] < np.mean(corners2[:, 0, 0]) and corners2[0][0][1] < np.mean(corners2[:, 0, 1])): 
-            print("\t Cannot find the same direction.");
-            return;
-
-        # Save the image
-        leftImageFolder = virtualCalibDataFolder + "/StereoCalibImages/LeftImages";
-        rightImageFolder = virtualCalibDataFolder + "/StereoCalibImages/RightImages";
-        sp.saveImage(leftImageFolder + f"/leftImage_{capturingIndex}.png", leftImage);
-        sp.saveImage(rightImageFolder + f"/rightImage_{capturingIndex}.png", rightImage);
-
-        # Increase the capturing index
-        capturingIndex = capturingIndex + 1;
-    
-    # Capture upper lower images
-    if (key == 'h'):
-        print("Capturing image: ", capturingIndex);
-        criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 30, 0.001);
-
-        # Capture the image
-        upperImage = viewer.captureCameraScreen("upperCamera", 1920, 1080);
-        lowerImage = viewer.captureCameraScreen("lowerCamera", 1920, 1080);
-
-        # Checking images
-        firstGrayImage = cv2.cvtColor(upperImage, cv2.COLOR_BGR2GRAY);
-        secondGrayImage = cv2.cvtColor(lowerImage, cv2.COLOR_BGR2GRAY);
-        boardSize = (9, 7);
-        ret1, corners1 = cv2.findChessboardCorners(firstGrayImage, boardSize, None);
-        ret2, corners2 = cv2.findChessboardCorners(secondGrayImage, boardSize, None);
-        if not (ret1 and ret2): 
-            print("\t Cannot detect chessboard.");
-            return;
-        corners1 = cv2.cornerSubPix(firstGrayImage, corners1, (11, 11), (-1, -1), criteria)
-        corners2 = cv2.cornerSubPix(secondGrayImage, corners2, (11, 11), (-1, -1), criteria)
-        if not (corners1[0][0][0] < np.mean(corners1[:, 0, 0]) and corners1[0][0][1] < np.mean(corners1[:, 0, 1]) and
-                    corners2[0][0][0] < np.mean(corners2[:, 0, 0]) and corners2[0][0][1] < np.mean(corners2[:, 0, 1])): 
-            print("\t Cannot find the same direction.");
-            return;
-
-        # Save the image
-        upperImageFolder = virtualCalibDataFolder + "/StereoCalibImages/UpperImages";
-        lowerImageFolder = virtualCalibDataFolder + "/StereoCalibImages/LowerImages";
-        sp.saveImage(upperImageFolder + f"/upperImage_{capturingIndex}.png", upperImage);
-        sp.saveImage(lowerImageFolder + f"/lowerImage_{capturingIndex}.png", lowerImage);
-
-        # Increase the capturing index
-        capturingIndex = capturingIndex + 1;
-    
-    # Capture center upper
-    if (key == 'i'):
-        print("Capturing image: ", capturingIndex);
-        criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 30, 0.001);
-
-        # Capture the image
-        centerImage = viewer.captureCameraScreen("centerCamera", 1920, 1080);
-        upperImage = viewer.captureCameraScreen("upperCamera", 1920, 1080);
-
-        # Checking images
-        firstGrayImage = cv2.cvtColor(centerImage, cv2.COLOR_BGR2GRAY);
-        secondGrayImage = cv2.cvtColor(upperImage, cv2.COLOR_BGR2GRAY);
-        boardSize = (9, 7);
-        ret1, corners1 = cv2.findChessboardCorners(firstGrayImage, boardSize, None);
-        ret2, corners2 = cv2.findChessboardCorners(secondGrayImage, boardSize, None);
-        if not (ret1 and ret2): 
-            print("\t Cannot detect chessboard.");
-            return;
-        corners1 = cv2.cornerSubPix(firstGrayImage, corners1, (11, 11), (-1, -1), criteria)
-        corners2 = cv2.cornerSubPix(secondGrayImage, corners2, (11, 11), (-1, -1), criteria)
-        if not (corners1[0][0][0] < np.mean(corners1[:, 0, 0]) and corners1[0][0][1] < np.mean(corners1[:, 0, 1]) and
-                    corners2[0][0][0] < np.mean(corners2[:, 0, 0]) and corners2[0][0][1] < np.mean(corners2[:, 0, 1])): 
-            print("\t Cannot find the same direction.");
-            return;
-
-        # Save the image
-        centerImageFolder = virtualCalibDataFolder + "/StereoCalibImages/CenterUpperImages/CenterImages";
-        upperImageFolder = virtualCalibDataFolder + "/StereoCalibImages/CenterUpperImages/UpperImages";
-        sp.saveImage(centerImageFolder + f"/centerImage_{capturingIndex}.png", centerImage);
-        sp.saveImage(upperImageFolder + f"/upperImage_{capturingIndex}.png", upperImage);
-
-        # Increase the capturing index
-        capturingIndex = capturingIndex + 1;
-
-    # Capture center lower
-    if (key == 'j'):
-        print("Capturing image: ", capturingIndex);
-        criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 30, 0.001);
-
-        # Capture the image
-        centerImage = viewer.captureCameraScreen("centerCamera", 1920, 1080);
-        lowerImage = viewer.captureCameraScreen("lowerCamera", 1920, 1080);
-
-        # Checking images
-        firstGrayImage = cv2.cvtColor(centerImage, cv2.COLOR_BGR2GRAY);
-        secondGrayImage = cv2.cvtColor(lowerImage, cv2.COLOR_BGR2GRAY);
-        boardSize = (9, 7);
-        ret1, corners1 = cv2.findChessboardCorners(firstGrayImage, boardSize, None);
-        ret2, corners2 = cv2.findChessboardCorners(secondGrayImage, boardSize, None);
-        if not (ret1 and ret2): 
-            print("\t Cannot detect chessboard.");
-            return;
-        corners1 = cv2.cornerSubPix(firstGrayImage, corners1, (11, 11), (-1, -1), criteria)
-        corners2 = cv2.cornerSubPix(secondGrayImage, corners2, (11, 11), (-1, -1), criteria)
-        if not (corners1[0][0][0] < np.mean(corners1[:, 0, 0]) and corners1[0][0][1] < np.mean(corners1[:, 0, 1]) and
-                    corners2[0][0][0] < np.mean(corners2[:, 0, 0]) and corners2[0][0][1] < np.mean(corners2[:, 0, 1])): 
-            print("\t Cannot find the same direction.");
-            return;
-
-        # Save the image
-        centerImageFolder = virtualCalibDataFolder + "/StereoCalibImages/CenterLowerImages/CenterImages";
-        lowerImageFolder = virtualCalibDataFolder + "/StereoCalibImages/CenterLowerImages/LowerImages";
-        sp.saveImage(centerImageFolder + f"/centerImage_{capturingIndex}.png", centerImage);
-        sp.saveImage(lowerImageFolder + f"/lowerImage_{capturingIndex}.png", lowerImage);
-
-        # Increase the capturing index
-        capturingIndex = capturingIndex + 1;
-
-    # Capture center left
-    if (key == 'k'):
-        print("Capturing image: ", capturingIndex);
-        criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 30, 0.001);
-
-        # Capture the image
-        centerImage = viewer.captureCameraScreen("centerCamera", 1920, 1080);
-        leftImage = viewer.captureCameraScreen("leftCamera", 1920, 1080);
-
-        # Checking images
-        firstGrayImage = cv2.cvtColor(centerImage, cv2.COLOR_BGR2GRAY);
-        secondGrayImage = cv2.cvtColor(leftImage, cv2.COLOR_BGR2GRAY);
-        boardSize = (9, 7);
-        ret1, corners1 = cv2.findChessboardCorners(firstGrayImage, boardSize, None);
-        ret2, corners2 = cv2.findChessboardCorners(secondGrayImage, boardSize, None);
-        if not (ret1 and ret2): 
-            print("\t Cannot detect chessboard.");
-            return;
-        corners1 = cv2.cornerSubPix(firstGrayImage, corners1, (11, 11), (-1, -1), criteria)
-        corners2 = cv2.cornerSubPix(secondGrayImage, corners2, (11, 11), (-1, -1), criteria)
-        if not (corners1[0][0][0] < np.mean(corners1[:, 0, 0]) and corners1[0][0][1] < np.mean(corners1[:, 0, 1]) and
-                    corners2[0][0][0] < np.mean(corners2[:, 0, 0]) and corners2[0][0][1] < np.mean(corners2[:, 0, 1])): 
-            print("\t Cannot find the same direction.");
-            return;
-
-        # Save the image
-        centerImageFolder = virtualCalibDataFolder + "/StereoCalibImages/CenterLeftImages/CenterImages";
-        leftImageFolder = virtualCalibDataFolder + "/StereoCalibImages/CenterLeftImages/LeftImages";
-        sp.saveImage(centerImageFolder + f"/centerImage_{capturingIndex}.png", centerImage);
-        sp.saveImage(leftImageFolder + f"/leftImage_{capturingIndex}.png", leftImage);
-
-        # Increase the capturing index
-        capturingIndex = capturingIndex + 1;
-
-    # Capture center right
-    if (key == 'l'):
-        print("Capturing image: ", capturingIndex);
-        criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 30, 0.001);
-
-        # Capture the image
-        centerImage = viewer.captureCameraScreen("centerCamera", 1920, 1080);
-        rightImage = viewer.captureCameraScreen("rightCamera", 1920, 1080);
-
-        # Checking images
-        firstGrayImage = cv2.cvtColor(centerImage, cv2.COLOR_BGR2GRAY);
-        secondGrayImage = cv2.cvtColor(rightImage, cv2.COLOR_BGR2GRAY);
-        boardSize = (9, 7);
-        ret1, corners1 = cv2.findChessboardCorners(firstGrayImage, boardSize, None);
-        ret2, corners2 = cv2.findChessboardCorners(secondGrayImage, boardSize, None);
-        if not (ret1 and ret2): 
-            print("\t Cannot detect chessboard.");
-            return;
-        corners1 = cv2.cornerSubPix(firstGrayImage, corners1, (11, 11), (-1, -1), criteria)
-        corners2 = cv2.cornerSubPix(secondGrayImage, corners2, (11, 11), (-1, -1), criteria)
-        if not (corners1[0][0][0] < np.mean(corners1[:, 0, 0]) and corners1[0][0][1] < np.mean(corners1[:, 0, 1]) and
-                    corners2[0][0][0] < np.mean(corners2[:, 0, 0]) and corners2[0][0][1] < np.mean(corners2[:, 0, 1])): 
-            print("\t Cannot find the same direction.");
-            return;
-
-        # Save the image
-        centerImageFolder = virtualCalibDataFolder + "/StereoCalibImages/CenterRightImages/CenterImages";
-        rightImageFolder = virtualCalibDataFolder + "/StereoCalibImages/CenterRightImages/RightImages";
-        sp.saveImage(centerImageFolder + f"/centerImage_{capturingIndex}.png", centerImage);
-        sp.saveImage(rightImageFolder + f"/rightImage_{capturingIndex}.png", rightImage);
-
-        # Increase the capturing index
-        capturingIndex = capturingIndex + 1;
-
-    # Capture left upper
-    if (key == 'm'):
-        print("Capturing image: ", capturingIndex);
-        criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 30, 0.001);
-
-        # Capture the image
-        leftImage = viewer.captureCameraScreen("leftCamera", 1920, 1080);
-        upperImage = viewer.captureCameraScreen("upperCamera", 1920, 1080);
-
-        # Checking images
-        firstGrayImage = cv2.cvtColor(leftImage, cv2.COLOR_BGR2GRAY);
-        secondGrayImage = cv2.cvtColor(upperImage, cv2.COLOR_BGR2GRAY);
-        boardSize = (9, 7);
-        ret1, corners1 = cv2.findChessboardCorners(firstGrayImage, boardSize, None);
-        ret2, corners2 = cv2.findChessboardCorners(secondGrayImage, boardSize, None);
-        if not (ret1 and ret2): 
-            print("\t Cannot detect chessboard.");
-            return;
-        corners1 = cv2.cornerSubPix(firstGrayImage, corners1, (11, 11), (-1, -1), criteria)
-        corners2 = cv2.cornerSubPix(secondGrayImage, corners2, (11, 11), (-1, -1), criteria)
-        if not (corners1[0][0][0] < np.mean(corners1[:, 0, 0]) and corners1[0][0][1] < np.mean(corners1[:, 0, 1]) and
-                    corners2[0][0][0] < np.mean(corners2[:, 0, 0]) and corners2[0][0][1] < np.mean(corners2[:, 0, 1])): 
-            print("\t Cannot find the same direction.");
-            return;
-
-        # Save the image
-        leftImageFolder = virtualCalibDataFolder + "/StereoCalibImages/LeftUpperImages/LeftImages";
-        upperImageFolder = virtualCalibDataFolder + "/StereoCalibImages/LeftUpperImages/UpperImages";
-        sp.saveImage(leftImageFolder + f"/leftImage_{capturingIndex}.png", leftImage);
-        sp.saveImage(upperImageFolder + f"/upperImage_{capturingIndex}.png", upperImage);
-
-        # Increase the capturing index
-        capturingIndex = capturingIndex + 1;
-
-    # Capture left lower
-    if (key == 'n'):
-        print("Capturing image: ", capturingIndex);
-        criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 30, 0.001);
-
-        # Capture the image
-        leftImage = viewer.captureCameraScreen("leftCamera", 1920, 1080);
-        lowerImage = viewer.captureCameraScreen("lowerCamera", 1920, 1080);
-
-        # Checking images
-        firstGrayImage = cv2.cvtColor(leftImage, cv2.COLOR_BGR2GRAY);
-        secondGrayImage = cv2.cvtColor(lowerImage, cv2.COLOR_BGR2GRAY);
-        boardSize = (9, 7);
-        ret1, corners1 = cv2.findChessboardCorners(firstGrayImage, boardSize, None);
-        ret2, corners2 = cv2.findChessboardCorners(secondGrayImage, boardSize, None);
-        if not (ret1 and ret2): 
-            print("\t Cannot detect chessboard.");
-            return;
-        corners1 = cv2.cornerSubPix(firstGrayImage, corners1, (11, 11), (-1, -1), criteria)
-        corners2 = cv2.cornerSubPix(secondGrayImage, corners2, (11, 11), (-1, -1), criteria)
-        if not (corners1[0][0][0] < np.mean(corners1[:, 0, 0]) and corners1[0][0][1] < np.mean(corners1[:, 0, 1]) and
-                    corners2[0][0][0] < np.mean(corners2[:, 0, 0]) and corners2[0][0][1] < np.mean(corners2[:, 0, 1])): 
-            print("\t Cannot find the same direction.");
-            return;
-
-        # Save the image
-        leftImageFolder = virtualCalibDataFolder + "/StereoCalibImages/LeftLowerImages/LeftImages";
-        lowerImageFolder = virtualCalibDataFolder + "/StereoCalibImages/LeftLowerImages/LowerImages";
-        sp.saveImage(leftImageFolder + f"/leftImage_{capturingIndex}.png", leftImage);
-        sp.saveImage(lowerImageFolder + f"/lowerImage_{capturingIndex}.png", lowerImage);
-
-        # Increase the capturing index
-        capturingIndex = capturingIndex + 1;
-
-    # Capture right upper
-    if (key == 'o'):
-        print("Capturing image: ", capturingIndex);
-        criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 30, 0.001);
-
-        # Capture the image
-        rightImage = viewer.captureCameraScreen("rightCamera", 1920, 1080);
-        upperImage = viewer.captureCameraScreen("upperCamera", 1920, 1080);
-
-        # Checking images
-        firstGrayImage = cv2.cvtColor(rightImage, cv2.COLOR_BGR2GRAY);
-        secondGrayImage = cv2.cvtColor(upperImage, cv2.COLOR_BGR2GRAY);
-        boardSize = (9, 7);
-        ret1, corners1 = cv2.findChessboardCorners(firstGrayImage, boardSize, None);
-        ret2, corners2 = cv2.findChessboardCorners(secondGrayImage, boardSize, None);
-        if not (ret1 and ret2): 
-            print("\t Cannot detect chessboard.");
-            return;
-        corners1 = cv2.cornerSubPix(firstGrayImage, corners1, (11, 11), (-1, -1), criteria)
-        corners2 = cv2.cornerSubPix(secondGrayImage, corners2, (11, 11), (-1, -1), criteria)
-        if not (corners1[0][0][0] < np.mean(corners1[:, 0, 0]) and corners1[0][0][1] < np.mean(corners1[:, 0, 1]) and
-                    corners2[0][0][0] < np.mean(corners2[:, 0, 0]) and corners2[0][0][1] < np.mean(corners2[:, 0, 1])): 
-            print("\t Cannot find the same direction.");
-            return;
-
-        # Save the image
-        rightImageFolder = virtualCalibDataFolder + "/StereoCalibImages/RightUpperImages/RightImages";
-        upperImageFolder = virtualCalibDataFolder + "/StereoCalibImages/RightUpperImages/UpperImages";
-        sp.saveImage(rightImageFolder + f"/rightImage_{capturingIndex}.png", rightImage);
-        sp.saveImage(upperImageFolder + f"/upperImage_{capturingIndex}.png", upperImage);
-
-        # Increase the capturing index
-        capturingIndex = capturingIndex + 1;
-
-    # Capture right lower
-    if (key == 'p'):
-        print("Capturing image: ", capturingIndex);
-        criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 30, 0.001);
-
-        # Capture the image
-        rightImage = viewer.captureCameraScreen("rightCamera", 1920, 1080);
-        lowerImage = viewer.captureCameraScreen("lowerCamera", 1920, 1080);
-
-        # Checking images
-        firstGrayImage = cv2.cvtColor(rightImage, cv2.COLOR_BGR2GRAY);
-        secondGrayImage = cv2.cvtColor(lowerImage, cv2.COLOR_BGR2GRAY);
-        boardSize = (9, 7);
-        ret1, corners1 = cv2.findChessboardCorners(firstGrayImage, boardSize, None);
-        ret2, corners2 = cv2.findChessboardCorners(secondGrayImage, boardSize, None);
-        if not (ret1 and ret2): 
-            print("\t Cannot detect chessboard.");
-            return;
-        corners1 = cv2.cornerSubPix(firstGrayImage, corners1, (11, 11), (-1, -1), criteria)
-        corners2 = cv2.cornerSubPix(secondGrayImage, corners2, (11, 11), (-1, -1), criteria)
-        if not (corners1[0][0][0] < np.mean(corners1[:, 0, 0]) and corners1[0][0][1] < np.mean(corners1[:, 0, 1]) and
-                    corners2[0][0][0] < np.mean(corners2[:, 0, 0]) and corners2[0][0][1] < np.mean(corners2[:, 0, 1])): 
-            print("\t Cannot find the same direction.");
-            return;
-
-        # Save the image
-        rightImageFolder = virtualCalibDataFolder + "/StereoCalibImages/RightLowerImages/RightImages";
-        lowerImageFolder = virtualCalibDataFolder + "/StereoCalibImages/RightLowerImages/LowerImages";
-        sp.saveImage(rightImageFolder + f"/rightImage_{capturingIndex}.png", rightImage);
-        sp.saveImage(lowerImageFolder + f"/lowerImage_{capturingIndex}.png", lowerImage);
-
-        # Increase the capturing index
-        capturingIndex = capturingIndex + 1;
-
-    # Exit capturing
-    if (key == 'q'):
-        sys.exit();
-def stereoCalibrateCameras(folderPath1, folderPath2, firstImagePrefix, secondImagePrefix, startIndex, endIndex, boardSize, squareSize, imageType="png"):
-    # Define the criteria for corner refinement
-    print("Define the criteria for corner refinement ...");
-    criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 30, 0.001)
-
-    # Initialize object points based on the chessboard pattern
-    print("Initialize object points based on the chessboard pattern ...");
-    objp = np.zeros((boardSize[0] * boardSize[1], 3), np.float32)
-    objp[:, :2] = np.mgrid[0:boardSize[0], 0:boardSize[1]].T.reshape(-1, 2)
-    objp *= squareSize
-
-    # Arrays to store object points and image points from all images
-    print("Arrays to store object points and image points from all images ...");
-    objpoints = []  # 3d points in real world space
-    imgpoints1 = []  # 2d points in image plane for camera 1
-    imgpoints2 = []  # 2d points in image plane for camera 2
-
-    # Iterate through the image pairs
-    print("Iterate through the image pairs ...");
-    imageSize = (1920, 1080);
-    for i in range(startIndex, endIndex + 1):
-        img1_path = os.path.join(folderPath1, f"{firstImagePrefix}_{i}.{imageType}")
-        img2_path = os.path.join(folderPath2, f"{secondImagePrefix}_{i}.{imageType}")
-        img1 = cv2.imread(img1_path);
-        height, width = img1.shape[:2];
-        imageSize = (width, height);
-        img2 = cv2.imread(img2_path)
-        gray1 = cv2.cvtColor(img1, cv2.COLOR_BGR2GRAY)
-        gray2 = cv2.cvtColor(img2, cv2.COLOR_BGR2GRAY)
-
-        # Find the chessboard corners
-        print("\t  Find the chessboard corners...");
-        ret1, corners1 = cv2.findChessboardCorners(gray1, boardSize, None)
-        ret2, corners2 = cv2.findChessboardCorners(gray2, boardSize, None)
-
-        # If found, draw and display the corners
-        print("\t  If found, draw and display the corners...")
-        if ret1 and ret2:
-            corners1 = cv2.cornerSubPix(gray1, corners1, (11, 11), (-1, -1), criteria)
-            corners2 = cv2.cornerSubPix(gray2, corners2, (11, 11), (-1, -1), criteria)
-            img1_with_corners = cv2.drawChessboardCorners(img1, boardSize, corners1, ret1)
-            img2_with_corners = cv2.drawChessboardCorners(img2, boardSize, corners2, ret2)
-
-            # Concatenate images horizontally
-            print("\t  Concatenate images horizontally...")
-            concatenated_img = np.hstack((img1_with_corners, img2_with_corners))
-            # Calculate the new height to maintain the aspect ratio
-            new_width = 1600
-            original_height, original_width = concatenated_img.shape[:2]
-            new_height = int((new_width / original_width) * original_height)
-            concatenated_img_resized = cv2.resize(concatenated_img, (new_width, new_height))
-            cv2.imshow("Chessboard Corners", concatenated_img_resized)
-            key = cv2.waitKey(0)
-
-            # If 'y' is pressed, add points to the lists
-            print("\t If 'y' is pressed, add points to the lists ...")
-            if key == ord('y'):
-                objpoints.append(objp)
-                imgpoints1.append(corners1)
-                imgpoints2.append(corners2)
-
-    cv2.destroyAllWindows()
-
-    # Calibrate the individual cameras
-    print("Calibrate the individual cameras ...");
-    ret1, mtx1, dist1, rvecs1, tvecs1 = cv2.calibrateCamera(objpoints, imgpoints1, gray1.shape[::-1], None, None)
-    ret2, mtx2, dist2, rvecs2, tvecs2 = cv2.calibrateCamera(objpoints, imgpoints2, gray2.shape[::-1], None, None)
-
-    # Stereo calibration
-    print("Stereo calibration ...");
-    retval, K1, D1, K2, D2, R, T, E, F = cv2.stereoCalibrate(objpoints, imgpoints1, imgpoints2, mtx1, dist1, mtx2, dist2, gray1.shape[::-1], 
-                                                             criteria=criteria, flags=cv2.CALIB_FIX_INTRINSIC);
-    R1, R2, P1, P2, Q, roi1, roi2 = cv2.stereoRectify(K1, D1, K2, D2, imageSize, R, T);
-
-    # Output the extrinsic parameters and calibration error
-    print("Output the extrinsic parameters and calibration error ...");
-    return K1, D1, K2, D2, P1, P2;
-def saveStereoCalibrationResults(filename, K1, D1, K2, D2, P1, P2):
-    """
-    Save camera parameters to an XML file using OpenCV.
-    
-    Parameters:
-    - filename: str, path to the XML file.
-    - K1, D1, K2, D2, P1, P2: numpy.ndarray, camera matrices to save.
-    """
-    fs = cv2.FileStorage(filename, cv2.FILE_STORAGE_WRITE)
-
-    # Write matrices
-    fs.write("K1", K1)
-    fs.write("D1", D1)
-    fs.write("K2", K2)
-    fs.write("D2", D2)
-    fs.write("P1", P1)
-    fs.write("P2", P2)
-
-    # Release file
-    fs.release()
-def loadStereoCalibrationResults(filename):
-    """
-    Load camera parameters from an XML file using OpenCV.
-    
-    Parameters:
-    - filename: str, path to the XML file.
-    
-    Returns:
-    - K1, D1, K2, D2, P1, P2: numpy arrays containing the camera parameters.
-    """
-    fs = cv2.FileStorage(filename, cv2.FILE_STORAGE_READ)
-
-    # Read matrices
-    K1 = fs.getNode("K1").mat()
-    D1 = fs.getNode("D1").mat()
-    K2 = fs.getNode("K2").mat()
-    D2 = fs.getNode("D2").mat()
-    P1 = fs.getNode("P1").mat()
-    P2 = fs.getNode("P2").mat()
-
-    # Release file
-    fs.release()
-
-    return K1, D1, K2, D2, P1, P2
-def computeProjectionMatrices(K1, K2, R, T):
-    """
-    Compute the projection matrices for a stereo camera setup.
-
-    :param K1: Intrinsic matrix of the left camera (3x3)
-    :param K2: Intrinsic matrix of the right camera (3x3)
-    :param R: Rotation matrix from left to right camera (3x3)
-    :param T: Translation vector from left to right camera (3,)
-    :return: P1 (3x4), P2 (3x4) projection matrices
-    """
-    # Ensure T is a column vector (3,1)
-    T = T.reshape(3, 1)
-
-    # Left Camera Projection Matrix: P1 = K1 * [I | 0]
-    P1 = K1 @ np.hstack((np.eye(3), np.zeros((3, 1))))
-
-    # Right Camera Projection Matrix: P2 = K2 * [R | T]
-    P2 = K2 @ np.hstack((R, T))
-
-    return P1, P2
-def stereoReconstruct3D(firstPoints, secondPoints, P1, P2):
-    """
-    Perform 3D reconstruction from stereo images using multiple points.
-
-    :param firstPoints: Nx2 array of points from the left camera.
-    :param secondPoints: Nx2 array of points from the right camera.
-    :param P1: 3x4 projection matrix of the left camera.
-    :param P2: 3x4 projection matrix of the right camera.
-    :return: Nx3 array of reconstructed 3D points.
-    """
-    # Ensure inputs are NumPy arrays with shape (2, N)
-    firstPoints = np.array(firstPoints, dtype=np.float64).T  # Shape (2, N)
-    secondPoints = np.array(secondPoints, dtype=np.float64).T  # Shape (2, N)
-
-    # Perform triangulation (output is 4xN in homogeneous coordinates)
-    points4D = cv2.triangulatePoints(P1, P2, firstPoints, secondPoints)
-
-    # Convert from homogeneous to 3D Cartesian coordinates
-    points3D = (points4D[:3] / points4D[3]).T  # Shape (N, 3)
-
-    return points3D  # Return Nx3 array
-def estimateEssentialMatrix(pts1, pts2, K):
-    """ Compute the Essential Matrix using feature correspondences """
-    E, mask = cv2.findEssentialMat(pts1, pts2, K, method=cv2.RANSAC, prob=0.999, threshold=1.0)
-    return E, mask
-def recoverPoseAndTriangulate(pts1, pts2, E, K):
-    """ Recover camera pose (R, t) and triangulate 3D points """
-    _, R, t, mask = cv2.recoverPose(E, pts1, pts2, K)
-
-    # Camera Projection Matrices
-    P1 = np.hstack((np.eye(3), np.zeros((3, 1))))  # First camera at [I | 0]
-    P2 = np.hstack((R, t))  # Second camera at [R | t]
-
-    P1 = K @ P1  # Intrinsic * Extrinsic
-    P2 = K @ P2
-
-    # Triangulation
-    pts1 = pts1.T
-    pts2 = pts2.T
-    points4D = cv2.triangulatePoints(P1, P2, pts1, pts2)
-
-    # Convert from homogeneous coordinates
-    points3D = points4D[:3] / points4D[3]
-    return points3D.T
-def reconstruct3DSFMBased(points1, points2, K):
-    """
-    Reconstructs 3D points from two 2D views by resolving motion ambiguity.
-
-    Inputs:
-        - points1: Nx2 array of 2D points in the first image.
-        - points2: Nx2 array of 2D points in the second image.
-        - K: 3x3 camera intrinsic matrix.
-
-    Outputs:
-        - best3DPoints: Nx3 array of reconstructed 3D points.
-    """
-
-    # Compute the Essential Matrix
-    E, _ = cv2.findEssentialMat(points1, points2, K, method=cv2.RANSAC, threshold=1.0)
-
-    # Decompose E to find possible R and t
-    U, _, Vt = np.linalg.svd(E)
-
-    # Ensure U and Vt are proper rotation matrices
-    W = np.array([[0, -1, 0], 
-                  [1,  0, 0], 
-                  [0,  0, 1]])
-
-    # Possible solutions
-    R1 = U @ W @ Vt
-    R2 = U @ W.T @ Vt
-    t1 = U[:, 2]
-    t2 = -U[:, 2]
-
-    # Ensure rotation matrices are valid
-    if np.linalg.det(R1) < 0:
-        R1 = -R1
-    if np.linalg.det(R2) < 0:
-        R2 = -R2
-
-    # Four possible solutions for (R, t)
-    solutions = [(R1, t1), (R1, t2), (R2, t1), (R2, t2)]
-
-    def triangulate(R, t):
-        """ Triangulates 3D points given a rotation R and translation t """
-        P1 = K @ np.hstack((np.eye(3), np.zeros((3, 1))))  # Projection matrix for first camera
-        P2 = K @ np.hstack((R, t.reshape(3, 1)))  # Projection matrix for second camera
-
-        # Convert points to homogeneous format
-        points1_h = points1.T
-        points2_h = points2.T
-
-        # Triangulate 3D points
-        points4D_h = cv2.triangulatePoints(P1, P2, points1_h, points2_h)
-        points3D = (points4D_h[:3] / points4D_h[3]).T  # Convert to 3D
-
-        # Count valid points (Z > 0 in both cameras)
-        valid_count = np.sum(points3D[:, 2] > 0)
-        return valid_count, points3D
-
-    # Select the best (R, t) by maximizing valid 3D points
-    best_R, best_t, best3DPoints = max(
-        [(R, t, triangulate(R, t)[1]) for R, t in solutions], 
-        key=lambda item: np.sum(item[2][:, 2] > 0)
-    )
-    distances = np.linalg.norm(np.diff(best3DPoints, axis=0), axis=1)
-    scaleFactor = np.mean(distances)
-    if scaleFactor > 0:
-        best3DPoints /= scaleFactor
-
-    return best3DPoints
-def reconstruct3DSFMBasedWithRealPoints(points1, points2, K, realPoints):
-    """
-    Reconstructs 3D points from two 2D views by resolving motion ambiguity and scaling with real-world points.
-
-    Inputs:
-        - points1: Nx2 array of 2D points in the first image.
-        - points2: Nx2 array of 2D points in the second image.
-        - K: 3x3 camera intrinsic matrix.
-        - realPoints: Nx3 array of corresponding real-world 3D points for scale correction.
-
-    Outputs:
-        - best3DPoints: Nx3 array of reconstructed 3D points with corrected scale.
-    """
-
-    # Compute the Essential Matrix
-    E, _ = cv2.findEssentialMat(points1, points2, K, method=cv2.RANSAC, threshold=1.0)
-
-    # Decompose E to find possible R and t
-    U, _, Vt = np.linalg.svd(E)
-
-    # Ensure U and Vt are proper rotation matrices
-    W = np.array([[0, -1, 0], 
-                  [1,  0, 0], 
-                  [0,  0, 1]])
-
-    # Possible solutions
-    R1 = U @ W @ Vt
-    R2 = U @ W.T @ Vt
-    t1 = U[:, 2]
-    t2 = -U[:, 2]
-
-    # Ensure valid rotation matrices
-    if np.linalg.det(R1) < 0:
-        R1 = -R1
-    if np.linalg.det(R2) < 0:
-        R2 = -R2
-
-    # Four possible (R, t) solutions
-    solutions = [(R1, t1), (R1, t2), (R2, t1), (R2, t2)]
-
-    def triangulate(R, t):
-        """ Triangulates 3D points given a rotation R and translation t """
-        P1 = K @ np.hstack((np.eye(3), np.zeros((3, 1))))  # Projection matrix for first camera
-        P2 = K @ np.hstack((R, t.reshape(3, 1)))  # Projection matrix for second camera
-
-        # Convert points to homogeneous format
-        points1_h = points1.T
-        points2_h = points2.T
-
-        # Triangulate 3D points
-        points4D_h = cv2.triangulatePoints(P1, P2, points1_h, points2_h)
-        points3D = (points4D_h[:3] / points4D_h[3]).T  # Convert to 3D
-
-        # Count valid points (Z > 0 in both cameras)
-        valid_count = np.sum(points3D[:, 2] > 0)
-        return valid_count, points3D
-
-    # Select the best (R, t) by maximizing valid 3D points
-    best_R, best_t, best3DPoints = max(
-        [(R, t, triangulate(R, t)[1]) for R, t in solutions], 
-        key=lambda item: np.sum(item[2][:, 2] > 0)
-    )
-
-    # Compute scale factor using realPoints
-    if realPoints is not None and len(realPoints) == len(best3DPoints):
-        # Compute mean distance between consecutive real points
-        realDistances = np.linalg.norm(np.diff(realPoints, axis=0), axis=1)
-        reconDistances = np.linalg.norm(np.diff(best3DPoints, axis=0), axis=1)
-
-        scaleFactor = np.mean(realDistances) / np.mean(reconDistances) if np.mean(reconDistances) > 0 else 1.0
-        best3DPoints *= scaleFactor  # Apply scale correction
-
-    return best3DPoints
-def extractCaseId(path):
-    """
-    Extracts 'case-XXXXX' from a file path string.
-
-    Parameters:
-    - path (str): The file path string.
-
-    Returns:
-    - str: The extracted case ID, e.g., 'case-100467'.
-    """
-    match = re.search(r'case-\d+', path)
-    if match:
-        return match.group(0)
-    else:
-        return None
-def extractFolderFromZip(zipPath, targetFolderInZip, outputFolder):
-    """
-    Extracts all files from a specific folder inside a zip file and flattens them into a target output folder.
-
-    Parameters:
-    - zipPath (str): Path to the .zip file.
-    - targetFolderInZip (str): Folder path inside the zip to extract from (e.g., 'case-100467/STANDARD_HEAD-NECK/').
-    - outputFolder (str): Destination folder to extract files to.
-
-    Notes:
-    - Subdirectory structure from within the zip is ignored.
-    - All extracted files are saved directly into the output folder.
-    """
-    with zipfile.ZipFile(zipPath, 'r') as zip_ref:
-        # Normalize path
-        targetFolderInZip = targetFolderInZip.replace("\\", "/").rstrip("/") + "/"
-        
-        # Filter and extract files
-        for member in zip_ref.namelist():
-            if member.startswith(targetFolderInZip) and not member.endswith('/'):
-                # Read the file and write it flat into the output folder
-                filename = os.path.basename(member)
-                targetPath = os.path.join(outputFolder, filename)
-                
-                # Create output directory if it doesn't exist
-                os.makedirs(outputFolder, exist_ok=True)
-                
-                with zip_ref.open(member) as source, open(targetPath, 'wb') as target:
-                    target.write(source.read())
-def splitZipAndInternalPath(fullPath):
-    # Match ZIP file path (ends with .zip) and separate internal path
-    match = re.match(r'^(.*?\.zip)(?:[/\\]+(.*))?$', fullPath)
-    if match:
-        zipFilePath = match.group(1)
-        internalPath = match.group(2) if match.group(2) else ''
-        return zipFilePath, internalPath
-    else:
-        raise ValueError("Input path does not contain a valid .zip segment.")
-def zipAndRemoveFolder(inputFolderPath, outputFolderPath):
-    # Ensure paths are absolute
-    inputFolderPath = os.path.abspath(inputFolderPath)
-    outputFolderPath = os.path.abspath(outputFolderPath)
-
-    # Extract folder name to use as zip file name
-    folderName = os.path.basename(inputFolderPath)
-    zipFilePath = os.path.join(outputFolderPath, f"{folderName}.zip")
-
-    # Create output directory if it doesn't exist
-    os.makedirs(outputFolderPath, exist_ok=True)
-
-    # Create the zip file
-    with zipfile.ZipFile(zipFilePath, 'w', zipfile.ZIP_DEFLATED) as zipf:
-        for root, _, files in os.walk(inputFolderPath):
-            for file in files:
-                filePath = os.path.join(root, file)
-                # Write file to zip, preserving relative path inside folder
-                arcname = os.path.relpath(filePath, inputFolderPath)
-                zipf.write(filePath, arcname)
-
-    # Remove the original folder and its contents
-    shutil.rmtree(inputFolderPath)
-
-    print(f"Zipped folder '{inputFolderPath}' to '{zipFilePath}' and removed the original folder.")
-
-#*************************************************** PELVIS PREDICTION FROM PICKED FEATURES
-# This section will predict the pelvis bone and muscle based on the feature points picked on the MRI or CT image. 
-# The inputs:
-#  + The pelvis shape data;
-#  + The template pelvis bone;
-#  + The template pelvis muscle;
-# The outputs:
-#  + The subject specific pelvis bone;
-#  + The subject specific pelvis muscle;
-# Processing procedure:
-#  + Dataset preparation: 
-#    -> The template pelvis bone, 
-#    -> The template pelvis muscle, 
-#    -> The pelvis shape data with feature points,
-#    -> Other female pelvis CT meshes
-#  + Dataset processing:
-#    -> Scale the pelvis data into meter
-#    -> Generate the pelvis shape from the CT pelvis meshes
-#    -> Deform template pelvis shape to target pelvis shapes
-#  + Pelvis statistical shape modeling 
-#  + Pelvis bone regression based on feature points
-#  + Cross-validation
-#********************** TESTING FUNCTIONS
-def testRigidTransform():
-    # Initializing
-    print("Initializing ...");
-    templateFolder = r"H:\Data\Template";
-    pelvisReconFolder = r"H:\Data\PelvisBoneRecon";
-    femalePelvisFolder = pelvisReconFolder + "/FemalePelvisGeometries";
-    debugFolder = r"H:\Data\PelvisBoneRecon\Debugs";
-
-    # Reading template features
-    print("Getting template information ...");
-    tempShape = sp.readMesh(templateFolder + "/TemplatePelvisCoarseShape.ply");
-    tempFeatures = sp.read3DPointsFromPPFile(templateFolder + "/TempPelvisBoneMesh_picked_points.pp");
-
-    # Reading target features
-    print("Reading target information ...");
-    targetShape = sp.readMesh(femalePelvisFolder + f"/{100131}-PelvisBoneShape.ply");
-    targetFeatures = sp.read3DPointsFromPPFile(femalePelvisFolder + f"/{100131}-PelvisBoneMesh_picked_points.pp");
-
-    # Estimate rigid transform
-    print("Estimate rigid transform ...");
-    svdTransform = sp.estimateAffineTransformCPD(tempFeatures, targetFeatures);
-    defMesh = sp.transformMesh(tempShape, svdTransform);
-    sp.saveMeshToPLY(debugFolder + "/defMesh.ply", defMesh);
-
-    # Finished processing
-    print("Finished processing.");
-def testNonRigidICPRegistration():
-    # Initializing
-    print("Initializing ...");
-    debugFolder = r"H:\Data\PelvisBoneRecon\Debugs";
-
-    # Reading data
-    print("Reading data ...");
-    sourceMesh = sp.readMesh(templateDataFolder + "/TempPelvisBoneMesh.ply");
-    sourceFeatures = sp.read3DPointsFromPPFile(templateDataFolder + "/TempPelvisBoneMesh_picked_points.pp");
-    sourceFeatureIndices = sp.estimateNearestIndicesKDTreeBased(sourceFeatures, sourceMesh.vertices);
-    targetMesh = sp.readMesh(debugFolder + "/100131-PelvisBoneMesh.ply");
-    targetFeatures = sp.read3DPointsFromPPFile(debugFolder + "/100131-PelvisBoneMesh_picked_points.pp");
-
-    # Rigid transform the mesh 
-    print("Rigid transform the mesh ...");
-    defMesh = sp.cloneMesh(sourceMesh);
-    defFeatures = sourceFeatures.copy();
-    rigidTransform = sp.estimateRigidSVDTransform(sourceFeatures, targetFeatures);
-    defMesh = sp.transformMesh(defMesh, rigidTransform);
-    defFeatures = sp.transform3DPoints(defFeatures, rigidTransform);
-
-    # Deforming using Non-Rigid transform
-    print("Deforming using Non rigid transform ...");
-    nonRigidTransform = sp.estimateAffineTransformCPD(defFeatures, targetFeatures);
-    defMesh = sp.transformMesh(defMesh, nonRigidTransform);
-    defFeatures = sp.transform3DPoints(defFeatures, nonRigidTransform);
-
-    # Deforming using Non-rigid ICP
-    print("Deforming using Non-rigid ICP ...");
-    defMeshVertices = trimesh.registration.nricp_amberg(
-        source_mesh=defMesh,
-        target_geometry=targetMesh,
-        source_landmarks=sourceFeatureIndices,
-        target_positions=targetFeatures
-    )
-
-    # Debugging
-    print("Debugging ...");
-    defMesh.vertices = defMeshVertices;
-    sp.saveMeshToPLY(debugFolder + "/defMesh.ply", defMesh);
-
-    # Finished processing
-    print("Finished processing.");
-def renameTheFeaturePoints():
-    # Initializing
-    print("Initializing ...");
-    boneReconFolder = r"H:\Data\PelvisBoneRecon";
-    femaleGeoFolder = r"H:\Data\PelvisBoneRecon\FemalePelvisGeometries";
-    debugFolder = r"H:\Data\PelvisBoneRecon\Debugs";
-
-    # Reading IDs
-    print("Reading IDs ...");
-    femaleIDs = sp.readListOfStrings(boneReconFolder + "/FemalePelvisIDs.txt");
-
-    # Processing for template features
-    print("Processing for template features ...");
-    tempFeatures = sp.read3DPointsFromPPFile(r"H:\Data\Template/TempPelvisBoneMesh_picked_points.pp");
-    sp.save3DPointsToPPFile(r"H:\Data\Template/TempPelvisBoneMesh_picked_points.pp", tempFeatures);
-    
-    # Processing for each subject
-    print("Processing for each subject ...");
-    for i, ID in enumerate(femaleIDs):
-        # Debugging
-        print("Processing subject: ", i, " with ID: ", ID);
-
-        # Reading feature points
-        features = sp.read3DPointsFromPPFile(femaleGeoFolder + f"/{ID}-PelvisBoneMesh_picked_points.pp");
-
-        # Save feature back
-        sp.save3DPointsToPPFile(debugFolder + f"/{ID}-PelvisBoneMesh_picked_points.pp", features);
-
-    # Finished processing
-    print("Finished processing.");
-def fixNormalsForPelvisShape():
-    # Initializing
-    print("Initializing ...");
-    def same_direction(vector1, vector2):
-        dot_product = np.dot(vector1, vector2)
-        return dot_product > 0;
-    def fix_mesh_normals_outward(mesh: trimesh.Trimesh) -> trimesh.Trimesh:
-        """
-        Fix mesh normals to ensure they point outward from the surface.
-    
-        Parameters:
-            mesh (trimesh.Trimesh): Input mesh
-    
-        Returns:
-            trimesh.Trimesh: Mesh with corrected face and vertex normals
-        """
-        # Ensure mesh is watertight before fixing normals
-        if not mesh.is_watertight:
-            mesh.fill_holes()
-
-        # Reorient faces so normals point outward
-        mesh = mesh.copy()
-        mesh.fix_normals()  # Recomputes consistent winding order
-
-        # Optionally re-estimate vertex normals from updated face normals
-        mesh.vertex_normals = mesh.vertex_normals  # Force recomputation
-
-        # Checking inward and outward again
-        meshCentroid = sp.computeCentroidPoint(mesh.vertices);
-        vertexNormals = mesh.vertex_normals.copy();
-        for i, normal in enumerate(vertexNormals):
-            outVector = mesh.vertices[i] - meshCentroid;
-            vertexNormals[i] = outVector;
-        mesh.vertex_normals = vertexNormals;
-
-        # Return the mesh
-        return mesh
-    boneReconFolder = r"H:\Data\PelvisBoneRecon";
-    femaleGeoFolder = r"H:\Data\PelvisBoneRecon\FemalePelvisGeometries";
-    debugFolder = r"H:\Data\PelvisBoneRecon\Debugs";
-
-    # Reading IDs
-    print("Reading IDs ...");
-    femaleIDs = sp.readListOfStrings(boneReconFolder + "/FemalePelvisIDs.txt");
-
-    # Processing for each subject
-    print("Processing for each subject ...");
-    for i, ID in enumerate(femaleIDs):
-        # Debugging
-        print("Processing subject: ", i, " with ID: ", ID);
-
-        # Reading feature points
-        pelvisBoneShape = sp.readMesh(femaleGeoFolder + f"/{ID}-PelvisBoneShape.ply");
-
-        # Fixing the normals
-        pelvisBoneShape = fix_mesh_normals_outward(pelvisBoneShape);
-
-        # Save mesh
-        sp.saveMeshToPLY(debugFolder + f"/{ID}-PelvisBoneShape.ply", pelvisBoneShape);
-
-    # Finished processing
-    print("Finished processing.");
-def findROIPelvisFeatureIndices():
-    # Initialize
-    print("Initializing ...");
-    disk = "F:";
-    templateFolder = disk + r"\Data\Template/PelvisBonesMuscles";
-    debugFolder = disk + r"\Data\PelvisBoneRecon\Debugs";
-
-    # Reading full and ROI feature points
-    print("Reading full and ROI feature points ...");
-    fullFeatures = sp.read3DPointsFromOFFFile(templateFolder + "/TempPelvisBoneMesh_picked_points.off");
-    leftIliumFeatures = sp.read3DPointsFromOFFFile(templateFolder + "/TempPelvisBoneMesh_picked_points_leftIlium.off");
-    rightIliumFeatures = sp.read3DPointsFromOFFFile(templateFolder + "/TempPelvisBoneMesh_picked_points_rightIlium.off");
-    sacrumFeatures = sp.read3DPointsFromOFFFile(templateFolder + "/TempPelvisBoneMesh_picked_points_sacrum.off");
-
-    # Reading full pelvis mesh and ROI parts
-    print("Reading full pelvis mesh and ROI parts ...");
-    pelvisMesh = sp.readMesh(templateFolder + "/TempPelvisBoneMesh.ply");
-    pelvisLeftIliumMesh = sp.readMesh(templateFolder + "/TempPelvisBoneMesh_LeftIlium.ply");
-    pelvisRightIliumMesh = sp.readMesh(templateFolder + "/TempPelvisBoneMesh_RightIlium.ply");
-    pelvisSacrumMesh = sp.readMesh(templateFolder + "/TempPelvisBoneMesh_Sacrum.ply");
-    pelvisLeftSacroiliacJoint = sp.readMesh(templateFolder + "/TempPelvisBoneMesh_LeftSacroiliacJoint.ply");
-    pelvisRightSacroiliacJoint = sp.readMesh(templateFolder + "/TempPelvisBoneMesh_RightSacroiliacJoint.ply");
-    pelvisPubicJoint = sp.readMesh(templateFolder + "/TempPelvisBoneMesh_PubicJoint.ply");
-
-    # Estimate the feature indices
-    print("Estimate the feature indices ...");
-    leftIliumFeatureIndices = sp.estimateNearestIndicesKDTreeBased(leftIliumFeatures, fullFeatures);
-    rightIliumFeatureIndices = sp.estimateNearestIndicesKDTreeBased(rightIliumFeatures, fullFeatures);
-    sacrumFeatureIndices = sp.estimateNearestIndicesKDTreeBased(sacrumFeatures, fullFeatures);
-    sp.saveVectorXiToCSVFile(debugFolder + "/LeftIliumFeatureIndices.csv", leftIliumFeatureIndices);
-    sp.saveVectorXiToCSVFile(debugFolder + "/RightIliumFeatureIndices.csv", rightIliumFeatureIndices);
-    sp.saveVectorXiToCSVFile(debugFolder + "/SacrumFeatureIndices.csv", sacrumFeatureIndices);
-
-    # Estimate ROI part indices
-    print("Estimating ROI part indices ...");
-    leftIliumVertexIndices = sp.estimateNearestIndicesKDTreeBased(pelvisLeftIliumMesh.vertices, pelvisMesh.vertices);
-    rightIliumVertexIndices = sp.estimateNearestIndicesKDTreeBased(pelvisRightIliumMesh.vertices, pelvisMesh.vertices);
-    sacrumVertexIndices = sp.estimateNearestIndicesKDTreeBased(pelvisSacrumMesh.vertices, pelvisMesh.vertices);
-    leftSacroiliacJointVertexIndices = sp.estimateNearestIndicesKDTreeBased(pelvisLeftSacroiliacJoint.vertices, pelvisMesh.vertices);
-    rightSacroiliacJointVertexIndices = sp.estimateNearestIndicesKDTreeBased(pelvisRightSacroiliacJoint.vertices, pelvisMesh.vertices);
-    pubicVertexIndices = sp.estimateNearestIndicesKDTreeBased(pelvisPubicJoint.vertices, pelvisMesh.vertices);
-    sp.saveVectorXiToCSVFile(debugFolder + "/LeftIliumVertexIndices.csv", leftIliumVertexIndices);
-    sp.saveVectorXiToCSVFile(debugFolder + "/RightIliumVertexIndices.csv", rightIliumVertexIndices);
-    sp.saveVectorXiToCSVFile(debugFolder + "/SacrumVertexIndices.csv", sacrumVertexIndices);
-    sp.saveVectorXiToCSVFile(debugFolder + "/LeftSacroiliacJointVertexIndices.csv", leftSacroiliacJointVertexIndices);
-    sp.saveVectorXiToCSVFile(debugFolder + "/RightSacroiliacJointVertexIndices.csv", rightSacroiliacJointVertexIndices);
-    sp.saveVectorXiToCSVFile(debugFolder + "/PubicVertexIndices.csv", pubicVertexIndices);
-
-    # Checking the feature indices
-    print("Checking the feature indices ...");
-    leftIliumFeatures_checking = fullFeatures[leftIliumFeatureIndices];
-    rightIliumFeatures_checking = fullFeatures[rightIliumFeatureIndices];
-    sacrumFeatures_checking = fullFeatures[sacrumFeatureIndices];
-    sp.save3DPointsToOFFFile(debugFolder + "/fullFeatures_checking.off", fullFeatures);
-    sp.save3DPointsToOFFFile(debugFolder + "/leftIliumFeatures_checking.off", leftIliumFeatures_checking);
-    sp.save3DPointsToOFFFile(debugFolder + "/rightIliumFeatures_checking.off", rightIliumFeatures_checking);
-    sp.save3DPointsToOFFFile(debugFolder + "/sacrumFeatures_checking.off", sacrumFeatures_checking);
-
-    # Checking the ROI part indices
-    print("Checking the ROI part indices ...");
-    leftIliumVertices_checking = pelvisMesh.vertices[leftIliumVertexIndices];
-    rightIliumVertices_checking = pelvisMesh.vertices[rightIliumVertexIndices];
-    sacrumVertices_checking = pelvisMesh.vertices[sacrumVertexIndices];
-    leftSacroiliacVertices_checking = pelvisMesh.vertices[leftSacroiliacJointVertexIndices];
-    rightSacroiliacVertices_checking = pelvisMesh.vertices[rightSacroiliacJointVertexIndices];
-    pubicVertices_checking = pelvisMesh.vertices[pubicVertexIndices];
-    sp.save3DPointsToOFFFile(debugFolder + "/leftIliumVertices_checking.off", leftIliumVertices_checking);
-    sp.save3DPointsToOFFFile(debugFolder + "/rightIliumVertices_checking.off", rightIliumVertices_checking);
-    sp.save3DPointsToOFFFile(debugFolder + "/sacrumVertices_checking.off", sacrumVertices_checking);
-    sp.save3DPointsToOFFFile(debugFolder + "/leftSacroiliacVertices_checking.off", leftSacroiliacVertices_checking);
-    sp.save3DPointsToOFFFile(debugFolder + "/rightSacroiliacVertices_checking.off", rightSacroiliacVertices_checking);
-    sp.save3DPointsToOFFFile(debugFolder + "/pubicVertices_checking.off", pubicVertices_checking);
-
-    # Finished processing
-    print("Finished processing.");
-def testProjectionUsingNormals():
-    # Initializing
-    print("Initializing ...");
-    debugFolder = r"G:\Data\PelvisBoneRecon\Debugs";
-
-    # Reading the deformed mesh
-    print("Reading the deformed mesh ...");
-    defShape = sp.readMesh(debugFolder + "/125795-AlignedPelvisBoneShape.ply");
-    targetShape = sp.readMesh(debugFolder + "/125795-PelvisBoneShape.ply");
-
-    # Try to test projection using the normal nearest point
-    print("Try to test the projection using normals ...");
-    projectedMesh = sp.projectMeshOntoMesh(defShape, targetShape);
-
-    # Save the computed results
-    print("Saving the computed results ...");
-    sp.saveMeshToPLY(debugFolder + "/projectedMesh.ply", projectedMesh);
-
-    # Finished processing
-    print("Finished processing.");
-def testGeneratePelvisMeshFromPelvisShape_NoRigidAndNonRigidNormalization():
-    # Initializing
-    print("Initializing ...");
-    def allVerticesInside(cage, target):
-        """Check if all vertices of the target are inside the cage."""
-        # Placeholder function: You should implement a proper point-in-mesh test
-        return np.all(np.min(cage.vertices, axis=0) <= np.min(target.vertices, axis=0)) and \
-               np.all(np.max(cage.vertices, axis=0) >= np.max(target.vertices, axis=0))
-    templateFolder = r"G:\Data\Template";
-    debugFolder = r"G:\Data\PelvisBoneRecon\Debugs";
-
-    # Reading template pelvis mesh and shape
-    print("Reading template pelvis mesh and shape ...");
-    tempPelvisShape = sp.readMesh(templateFolder + "/TemplatePelvisCoarseShape.ply");
-    tempPelvisMesh = sp.readMesh(templateFolder + "/TempPelvisBoneMesh.ply");
-
-    # Reading the target shape
-    print("Target pelvis shape ...");
-    targetPelvisShape = sp.readMesh(debugFolder + "/100131-AlignedPelvisBoneShape.ply");
-
-    # Compute the Gaussian blenshape weights
-    print("Compute the Gaussian blend shape weights ...");
-    tempPelvisShapeWeights = sp.computeGaussianBlendShapeWeights(tempPelvisMesh.vertices, tempPelvisShape.vertices, 0.005);
-
-    # Try to deform the pelvis shape
-    print("Try to deform the pelvis shape ...");
-    defPelvisMeshVertices = sp.deformMeshWithBlendShapeWeights(tempPelvisMesh.vertices, tempPelvisShape.vertices, 
-                                                               targetPelvisShape.vertices, tempPelvisShapeWeights);
-    defPelvisMesh = sp.cloneMesh(tempPelvisMesh);
-    defPelvisMesh.vertices = defPelvisMeshVertices;
-
-    # Save the computed mesh
-    print("Save the deformed pelvis ...");
-    sp.saveMeshToPLY(debugFolder + "/defPelvisMesh.ply", defPelvisMesh);
-
-    # Finished processing
-    print("Finished processing.");
-def testGeneratePelvisMeshFromPelvisShape_WithRigidAndNonRigidNormalization_coupledGaussianDeformation():
-    # Initializing
-    print("Initializing ...");
-    def allVerticesInside(cage, target):
-        """Check if all vertices of the target are inside the cage."""
-        # Placeholder function: You should implement a proper point-in-mesh test
-        return np.all(np.min(cage.vertices, axis=0) <= np.min(target.vertices, axis=0)) and \
-               np.all(np.max(cage.vertices, axis=0) >= np.max(target.vertices, axis=0))
-    templateFolder = r"G:\Data\Template";
-    debugFolder = r"G:\Data\PelvisBoneRecon\Debugs";
-
-    # Reading template pelvis mesh and shape
-    print("Reading template pelvis mesh and shape ...");
-    tempPelvisShape = sp.readMesh(templateFolder + "/TemplatePelvisCoarseShape.ply");
-    tempPelvisMesh = sp.readMesh(templateFolder + "/TempPelvisBoneMesh.ply");
-
-    # Reading the target shape
-    print("Target pelvis shape ...");
-    targetPelvisShape = sp.readMesh(debugFolder + "/100131-AlignedPelvisBoneShape.ply");    
-
-    # Rigid and non rigid transform first
-    print("Rigid and non-rigid transform first ...");
-    defPelvisMesh = sp.cloneMesh(tempPelvisMesh);
-    defPelvisShape = sp.cloneMesh(tempPelvisShape);
-    svdTransform = sp.estimateRigidSVDTransform(defPelvisShape.vertices, targetPelvisShape.vertices);
-    defPelvisMesh = sp.transformMesh(defPelvisMesh, svdTransform);
-    defPelvisShape = sp.transformMesh(defPelvisShape, svdTransform);
-    affineTransform = sp.estimateAffineTransformCPD(defPelvisShape.vertices, targetPelvisShape.vertices);
-    defPelvisMesh = sp.transformMesh(defPelvisMesh, affineTransform);
-    defPelvisShape = sp.transformMesh(defPelvisShape, affineTransform);
-
-    # Compute the Gaussian blenshape weights
-    print("Compute the Gaussian blend shape weights ...");
-    tempPelvisShapeWeights = sp.computeGaussianBlendShapeWeights(defPelvisMesh.vertices, defPelvisShape.vertices, 0.005);
-
-    # Try to deform the pelvis shape
-    print("Try to deform the pelvis shape ...");
-    defPelvisMeshVertices = sp.deformMeshWithBlendShapeWeights(defPelvisMesh.vertices, defPelvisShape.vertices, targetPelvisShape.vertices, tempPelvisShapeWeights);
-    
-    # Save the computed mesh
-    print("Save the deformed pelvis ...");
-    sp.saveMeshToPLY(debugFolder + "/defPelvisMesh.ply", defPelvisMesh);
-
-    # Finished processing
-    print("Finished processing.");
-def testGeneratePelvisMeshFromPelvisShape_WithRigidAndNonRigidNormalization_coupledRadialBasicFunctionNonRigidICP():
-    # Initializing
-    print("Initializing ...");
-    def allVerticesInside(cage, target):
-        """Check if all vertices of the target are inside the cage."""
-        # Placeholder function: You should implement a proper point-in-mesh test
-        return np.all(np.min(cage.vertices, axis=0) <= np.min(target.vertices, axis=0)) and \
-               np.all(np.max(cage.vertices, axis=0) >= np.max(target.vertices, axis=0))
-    templateFolder = r"G:\Data\Template";
-    debugFolder = r"G:\Data\PelvisBoneRecon\Debugs";
-
-    # Reading template pelvis mesh and shape
-    print("Reading template pelvis mesh and shape ...");
-    tempPelvisShape = sp.readMesh(templateFolder + "/TemplatePelvisCoarseShape.ply");
-    tempPelvisMesh = sp.readMesh(templateFolder + "/TempPelvisBoneMesh.ply");
-    tempPelvisFeatures = sp.read3DPointsFromPPFile(templateFolder + "/TempPelvisBoneMesh_picked_points.pp");
-    sp.save3DPointsToOFFFile(templateFolder + "/TempPelvisBoneMesh_picked_points.off", tempPelvisFeatures);
-
-    # Reading the target shape
-    print("Target pelvis shape ...");
-    targetPelvisShape = sp.readMesh(debugFolder + "/100131-AlignedPelvisBoneShape.ply");
-    targetPelvisMesh = sp.readMesh(debugFolder + "/100131-PelvisBoneMesh.ply");
-
-    # Rigid and non rigid transform first
-    print("Rigid and non-rigid transform first ...");
-    defPelvisMesh = sp.cloneMesh(tempPelvisMesh);
-    defPelvisShape = sp.cloneMesh(tempPelvisShape);
-    svdTransform = sp.estimateRigidSVDTransform(defPelvisShape.vertices, targetPelvisShape.vertices);
-    defPelvisMesh = sp.transformMesh(defPelvisMesh, svdTransform);
-    defPelvisShape = sp.transformMesh(defPelvisShape, svdTransform);
-    affineTransform = sp.estimateAffineTransformCPD(defPelvisShape.vertices, targetPelvisShape.vertices);
-    defPelvisMesh = sp.transformMesh(defPelvisMesh, affineTransform);
-    defPelvisShape = sp.transformMesh(defPelvisShape, affineTransform);
-
-    # Deformation using the radial basic function
-    print("Deformation using the radial basic function ...");
-    displacements = targetPelvisShape.vertices - defPelvisShape.vertices;
-    rbf = RBFInterpolator(defPelvisShape.vertices, displacements, kernel='thin_plate_spline');
-    vertexDisplacement = rbf(defPelvisMesh.vertices);
-    deformedVertices = defPelvisMesh.vertices + vertexDisplacement;
-    defPelvisMesh.vertices = deformedVertices;
-
-    # Try to deform the separate parts of the pelvis using non-rigid ICP
-    print("Try to deform separate parts of the pelvis using non-rigid ICP ..");
-    
-    # Save the computed mesh
-    print("Save the deformed pelvis ...");
-    sp.saveMeshToPLY(debugFolder + "/defPelvisMesh.ply", defPelvisMesh);
-
-    # Finished processing
-    print("Finished processing.");
-def testEstimateFaceIndicesOnOtherMeshes():
-    # Initializing
-    print("Initializing ...");
-    def reconstructLandmarksFromBarycentric(mesh: trimesh.Trimesh, baryIndices: np.ndarray, baryCoords: np.ndarray) -> np.ndarray:
-        """
-        Reconstruct 3D points from barycentric coordinates and triangle indices.
-
-        Args:
-            mesh (trimesh.Trimesh): The source mesh.
-            triIndices (np.ndarray): (n,) array of triangle indices.
-            baryCoords (np.ndarray): (n, 3) array of barycentric coordinates.
-
-        Returns:
-            np.ndarray: (n, 3) array of reconstructed 3D points.
-        """
-        if baryIndices.shape[0] != baryCoords.shape[0]:
-            raise ValueError("triIndices and baryCoords must have the same number of entries.")
-
-        # Get the triangles from the mesh
-        tris = mesh.triangles[baryIndices]  # shape (n, 3, 3)
-
-        # Unpack vertices: V = w1*V0 + w2*V1 + w3*V2
-        v0 = tris[:, 0, :]  # (n, 3)
-        v1 = tris[:, 1, :]
-        v2 = tris[:, 2, :]
-
-        w1 = baryCoords[:, 0][:, np.newaxis]
-        w2 = baryCoords[:, 1][:, np.newaxis]
-        w3 = baryCoords[:, 2][:, np.newaxis]
-
-        points = w1 * v0 + w2 * v1 + w3 * v2  # (n, 3)
-        return points
-    def transferFaceIndicesToOtherMesh(sourceFaceIndices, sourceMesh, targetMesh):
-        # Compute the vertex mapping
-        sourceVertexIndicesOnTargetMesh = sp.estimateNearestIndicesKDTreeBased(sourceMesh.vertices, targetMesh.vertices);
-
-        # Replace vertex indices on from mesh triangles
-        sourceFaces = sourceMesh.faces[sourceFaceIndices];
-        for i, face in enumerate(sourceFaces):
-            face[0] = sourceVertexIndicesOnTargetMesh[face[0]];
-            face[1] = sourceVertexIndicesOnTargetMesh[face[1]];
-            face[2] = sourceVertexIndicesOnTargetMesh[face[2]];
-            sourceFaces[i] = face;
-
-        # Build the kdtree of the target faces
-        targetFaceKDTree = KDTree(targetMesh.faces);
-
-        # Query the point indices
-        distanceBuffer, outFaceIndices = targetFaceKDTree.query(sourceFaces);
-
-        # Return the outFaceIndices
-        return outFaceIndices;
-    secondDebugFolder = r"H:\Data\PelvisBoneRecon\Debugs_2";
-
-    # Reading bary indices and coords
-    print("Reading bary indices and coords ...");
-    oldBaryIndices = sp.readIndicesFromCSVFile(secondDebugFolder + "/tempLeftSacroiliacJointFeatureBaryIndices.csv");
-    oldBaryCoords = sp.readMatrixFromCSVFile(secondDebugFolder + "/tempLeftSacroiliacJointFeatureBaryCoords.csv");
-
-    # Reading meshes
-    print("Reading meshes ...");
-    pelvisMesh = sp.readMesh(secondDebugFolder + "/tempPelvisMesh.ply");
-    withoutJointPelvisMesh = sp.readMesh(secondDebugFolder + "/tempWithoutJointPelvisMesh.ply");
-
-    # Testing the feature points on the old mesh
-    print("Testing feature points on the old mesh ...");
-    featurePoints = reconstructLandmarksFromBarycentric(withoutJointPelvisMesh, oldBaryIndices, oldBaryCoords);
-    sp.save3DPointsToOFFFile(secondDebugFolder + "/featurePoints.off", featurePoints);
-
-    # Testing transfering the bary indices
-    print("Testing transfering the bary indices ...");
-    newBaryIndices = transferFaceIndicesToOtherMesh(oldBaryIndices, withoutJointPelvisMesh, pelvisMesh);
-    print("\t The shape of oldBaryIndices: ", oldBaryIndices.shape);
-    print("\t The shape of newBaryIndices: ", newBaryIndices.shape);
-
-    # Testing new bary indices
-    print("Testing new bary indices ...");
-    newBaryCoords = oldBaryCoords.copy();
-    newFeaturePoints = reconstructLandmarksFromBarycentric(pelvisMesh, newBaryIndices, newBaryCoords);
-    sp.save3DPointsToOFFFile(secondDebugFolder + "/newFeaturePoints.off", newFeaturePoints);
-
-    # Finished processing
-    print("Finished processing.");
-def prepareTemplatePelvisFloorMuscles():
-    # Initializing
-    print("Initializing ...");
-
-    # Reading mm floor muscles
-    print("Reading mm floor muscles ...");
-
-    # Finished processing
-    print("Finished processing.");
-def prepareFeaturePointIndices():
-    # Intializing
-    print("Initializing ...");
-    disk = "G:";
-    debugFolder = disk + r"\Data\PelvisBoneRecon\Debugs";
-
-    # Reading data
-    print("Reading data ...");
-    featurePoints = sp.read3DPointsFromPPFile(debugFolder + "/TempPelvisBoneMuscles_AllFeaturePoints.pp");
-
-    # Save feature points to off file
-    print("Save feature points to off file ...");
-    sp.save3DPointsToOFFFile(debugFolder + "/AllFeaturePoints.off", featurePoints);
-
-    # Finished processing
-    print("Finished processing.");
-def estimateMappingFromNewToOldFeaturePicking():
-    # Initializing
-    print("Initializing ...");
-
-    # Reading new and old picked feature points
-    print("Reading new and old picked feature points ...");
-    newFeaturePoints = sp.read3DPointsFromPPFile(debugFolder + "/TempPelvisBoneMesh_v2_picked_points.pp")
-    oldFeaturePoints = sp.read3DPointsFromPPFile(debugFolder + "/TempPelvisBoneMesh_picked_points.pp")
-
-    # Estimate the mapping old feature to old features
-    print("Estimate the mapping from old to old feature picking ...");
-    mappingIndices = sp.estimateNearestIndicesKDTreeBased(oldFeaturePoints, newFeaturePoints);
-
-    # Save the mapping indices
-    print("Save the mapping indices ...");
-    sp.saveVectorXiToCSVFile(debugFolder + "/FeatureMappingIndices.csv", mappingIndices);
-
-    # Finished processing
-    print("Finished processing.");
-def loadSaveNewOldPelvisFeaturePoints():
-    # Initializing
-    print("Initializing ...");
-    templatePelvisMuscleFolder = r"I:\SpinalPelvisPred\Data\Template\PelvisBonesMuscles";
-    debugFolder = r"I:\SpinalPelvisPred\Data\PelvisBoneRecon\Debugs";
-
-    # Reading old feature points
-    print("Reading old feature points ...");
-    oldFeaturePoints = sp.read3DPointsFromPPFile(templatePelvisMuscleFolder + "/TempPelvisBoneMesh_picked_points.pp");
-    newFeaturePoints = sp.read3DPointsFromPPFile(templatePelvisMuscleFolder + "/TempPelvisBoneMesh_picked_points_v2.pp");
-    pelvisBone = sp.readMeshFromPLY(templatePelvisMuscleFolder + "/TempPelvisBoneMesh.ply");
-
-    # Debugging
-    print("Debugging ...");
-    sp.saveMeshToPLY(debugFolder + "/TempPelvisBoneMesh.ply", pelvisBone);
-    sp.save3DPointsToOFFFile(debugFolder + "/TempPelvisBoneMesh_picked_points.off", oldFeaturePoints);
-    sp.save3DPointsToOFFFile(debugFolder + "/TempPelvisBoneMesh_picked_points_v2.off", newFeaturePoints);
-
-    # Finished procesing
-    print("Finished processing.");
-def testingIndicesMappingForPelvisFeatures():
-    # Initializing
-    print("Initializing ...");
-    debugFolder = r"I:\SpinalPelvisPred\Data\PelvisBoneRecon\Debugs";
-
-    # Reading old feature points
-    print("Reading old feature points ...");
-    oldFeaturePoints = sp.read3DPointsFromPPFile(debugFolder + "/7-PelvisBoneMesh_picked_points.pp");
-
-    # Reading mapping indices
-    print("Reading mapping indices ...");
-    mappingIndices = sp.readIndicesFromCSVFile(debugFolder + "/NewMexicoTo1KPelvisFeatureMappingIndices.csv");
-
-    # Forming new feature points
-    print("Forming new feature points ...");
-    newFeaturePoints = oldFeaturePoints[mappingIndices];
-
-    # Reading template pelvis mesh and features
-    print("Reading template pelvis mesh and features ...");
-    templatePelvisMesh = sp.readMesh(debugFolder + "/TempPelvisBoneMesh.ply");
-    templatePelvisFeatures = sp.read3DPointsFromPPFile(debugFolder + "/TempPelvisBoneMesh_picked_points.pp");
-
-    # Debugging
-    print("Debugging ...");
-    sp.save3DPointsToOFFFile(debugFolder + "/NewFeaturePoints.off", newFeaturePoints);
-    sp.save3DPointsToOFFFile(debugFolder + "/OldFeaturePoints.off", oldFeaturePoints);
-    sp.save3DPointsToOFFFile(debugFolder + "/TemplatePelvisFeatures.off", templatePelvisFeatures);
-
-    # Finished processing
-    print("Finished processing.");
-def fix1KPelvisFeaturePoints():
-    # Initializing
-    print("Initializing ...");
-    if (len(sys.argv) < 3):
-        print("\t Please write the command like: [ProgramName] [StartSubjectIndex] [EndSubjectIndex]");
-        return;
-    startIndex = int(sys.argv[1]); endIndex = int(sys.argv[2]);
-    processingDisk = "I:/SpinalPelvisPred";
-    templateFolder = processingDisk + "/Data/Template";
-    pelvisBoneMuscleTempFolder = templateFolder + "/PelvisBonesMuscles";
-    pelvisReconFolder = processingDisk +  "/Data/PelvisBoneRecon";
-    targetPelvisFolder = pelvisReconFolder + "/FemalePelvisGeometries/1KPelvisData";
-    debugFolder = processingDisk + "/Data/PelvisBoneRecon/Debugs";
-
-    # Reading feature mapping indices
-    print("Reading feature mapping indices ...");
-    mappingIndices = sp.readIndicesFromCSVFile(pelvisBoneMuscleTempFolder + "/NewMexicoTo1KPelvisFeatureMappingIndices.csv");
-    print("\t The number of indices: ", mappingIndices.shape[0]);
-
-    # Reading 1k pelvis IDs
-    print("Reading 1K pelvis IDs ...");
-    subjectIDs = sp.readListOfStrings(pelvisReconFolder + "/FemalePelvisGeometries/1KPelvisDataFemalePelvisIDs.txt");
-    print("\t The number of subject IDs: ", len(subjectIDs));
-
-    # Processing for each subject
-    print("Processing for each subject ...");
-    for i in range(startIndex, endIndex + 1):        
-        # Debugging
-        sID = subjectIDs[i];
-        print("\t Processing subject: ", i, " with ID: ", sID);
-
-        # Reading the feature points
-        featurePointsFilePath = targetPelvisFolder + f"/{sID}-PelvisBoneMesh_picked_points.pp";
-        oldFeatures = sp.read3DPointsFromPPFile(featurePointsFilePath);
-
-        # Fixing feature points
-        fixedFeatures = oldFeatures[mappingIndices];
-
-        # Save the fixed feature points
-        sp.save3DPointsToPPFile(debugFolder + f"/{sID}-PelvisBoneMesh_picked_points.pp", fixedFeatures);
-
-    # Finished processing
-    print("Finished processing.");
-def testEstimatingROIFeatureIndices():
-    # Initializing
-    print("Initializing ...");
-    debugFolder = r"I:\SpinalPelvisPred\Data\Debugs";
-
-    # Reading full pelvis tructure and roi pelvis tructure
-    print("Reading full pelvis structure and roi pelvis structure ...");
-    fullPelvisStructure = sp.readMesh(debugFolder + "/TempPelvisBoneMuscles.ply");
-    roiPelvisStructure = sp.readMesh(debugFolder + "/TempPelvisBoneMesh_LeftIlium.ply");
-
-    # Finished processing
-    print("Finished processing.");
-
-#********************************************************** SUPPORTING FUNCTIONS
-
-#********************************************************** CHECKING FUNCTIONS
-def checkPelvisFeaturePointsFor1KPelvisData():
-    # Initializing
-    print("Initializing ...");
-    def extractIDFromFileName(fileName, suffix):
-        """
-        Extract numeric ID from a file name.
-        
-        Parameters:
-        - fileName (str): The file name (e.g., "case-100467-something.ext" or "100467-PelvisBoneMesh.ply")
-        - suffix (str): Optional suffix to remove from the end
-        
-        Returns:
-        - str: The extracted numeric ID (e.g., "100467")
-        """
-        # Get just the filename without any path components
-        baseName = os.path.basename(fileName)
-        
-        # Remove the suffix if provided
-        if suffix and baseName.endswith(suffix):
-            baseName = baseName[:-len(suffix)]
-        
-        # Remove file extension if no suffix was provided
-        if not suffix:
-            baseName = os.path.splitext(baseName)[0]
-        
-        # Extract numeric ID using regex
-        # This handles patterns like "case-100467", "100467-something", or just "100467"
-        match = re.search(r'\b(\d+)\b', baseName)
-        
-        if match:
-            return match.group(1)
-        else:
-            return None
-    pelvisReconFolder = r"I:\SpinalPelvisPred\Data\PelvisBoneRecon";
-    femalePelvisFolder = pelvisReconFolder + "/FemalePelvisGeometries";
-    kPelvisFolder = femalePelvisFolder + "/1KPelvisData";
-
-    # Prepare IDs for the 1K pelvis data
-    print("Prepare IDs for the 1K pelvis data ...");
-    ## List all pp file inside the folder
-    ppFiles = sp.listAllFilesWithExtensionInsideAFolder(kPelvisFolder, ".pp");
-    ## Extract the IDs from the file names, the file name has the format: {ID}-PelvisBoneMesh_picked_points.pp
-    subjectIDs = [extractIDFromFileName(fileName, "-PelvisBoneMesh_picked_points.pp") for fileName in ppFiles];
-    ## Save the IDs to the debug folder
-    sp.saveListOfStrings(femalePelvisFolder + "/1KPelvisDataFemalePelvisIDs.txt", subjectIDs);
-
-    # Initialize visual interface for checking visualization
-    print("Initialize visual interface for checking visualization ...");
-    viewer.initializeAutoSingleRenderer();
-    viewer.setWindowSize(1600, 900);
-    viewer.setTrackballCameraWindowInteractor();
-    viewer.setBackgroundColorByName("white");
-    
-    # Checking for each subject
-    print("Checking for each subject ...");
-    for i, sID in enumerate(subjectIDs):
-        # Debugging 
-        print("Processing subject: ", i, " with ID: ", sID, end="", flush=True);
-
-        # Reading pelvis bone mesh and shape
-        pelvisBoneMesh = sp.readMesh(kPelvisFolder + f"/{sID}-PelvisBoneMesh.ply");
-        pelvisBoneShape = sp.readMesh(kPelvisFolder + f"/{sID}-PelvisBoneShape.ply");
-
-        # Reading features
-        pickPointFilePath = kPelvisFolder + f"/{sID}-PelvisBoneMesh_picked_points.pp";
-        features = sp.read3DPointsFromPPFile(pickPointFilePath);
-
-        # Visualize the shape mesh with feature points
-        viewer.addMesh("PelvisBoneShape", pelvisBoneShape, "blue");
-        viewer.addMesh("PelvisBoneMesh", pelvisBoneMesh, "red");
-        for j, feature in enumerate(features):
-            viewer.addColorSphereMesh(f"FeaturePoint_{j}", feature, 0.005);
-        viewer.setMeshOpacity("PelvisBoneShape", 0.5);
-        viewer.resetMainCamera();
-        viewer.render();
-
-        # Start window interactor
-        viewer.startWindowInteractor();
-
-        # Remove all rendered objects
-        viewer.removeAllRenderedObjects();
-
-        # Checking len
-        if (len(features) == 53): print("-> OK"); 
-        else: print("-> NO OK");
-
-    # Finished processing
-    print("Finished processing.");
 
 #********************************************************** PROCESSING FUNCTIONS
-#************************** DATA PROCESSING FUNCTIONS
-def reOrganise1KPelvisMeshes():
-    # Initialize
-    print("Initializing ...");
-    targetFolder = r"G:\Data\Others\1KPelvis\3DMeshes";
-    reOrganizedFolder = r"G:\Data\Others\1KPelvis";
-
-    # List folder names
-    print("Listing folder names ...");
-    folderNames = sp.listAllFolderNames(targetFolder);
-
-    # Process for each folder name
-    print("Process for each folder name ...");
-    subjectID = 0;
-    for folderName in folderNames:
-        # Debugging
-        print("\t Processing folder: ", folderName);
-
-        # Reading mesh
-        pelvisBoneMesh = sp.readMesh(f"{targetFolder}/{folderName}/TempSegmentation.stl");
-
-        # Save the mesh
-        sp.saveMeshToPLY(f"{reOrganizedFolder}/{subjectID}-PelvisBoneMesh.ply", pelvisBoneMesh);
-        subjectID += 1;
-
-    # Finished processing
-    print("Finished processing.");
-def formPelvisFrom1KPelvisMeshes():
-    # Initializing
-    print("Initializing ...");
-    pelvisMeshFolder = r"H:\Data\Others\1KPelvis\1KPelvisMeshes";
-    mergedPelvisMeshFolder = r"H:\Data\Others\1KPelvis\1KPelvisMeshes_Merged";
-    numOfSubjects = 1106;
-
-    # Processing for each subject
-    print("Processing for each subject ...");
-    for i in range(numOfSubjects):
-        # Debugging
-        print("\t Processing subject: ", i);
-
-        # Reading meshes
-        meshParts = [];
-        for j in range(1, 4):
-            meshParts.append(sp.readMesh(f"{pelvisMeshFolder}/Model_{i}/TempSegmentation_{j}.stl"));
-
-        # Merge the mesh part
-        pelvisMesh = sp.mergeMeshes(meshParts);
-
-        # Save mesh
-        sp.saveMeshToPLY(f"{mergedPelvisMeshFolder}/{i}-PelvisBoneMesh.ply", pelvisMesh);
-
-    # Finished processing
-    print("Finished processing.");
-def scale1KPelvisToMeter():
-    # Initializing
-    print("Initializing ...");
-    inputFolder = r"H:\Data\Others\1KPelvis\1KPelvisMeshes_Merged";
-    outputFolder = r"H:\Data\Others\1KPelvis\1KPelvisMeshes_Scaled";
-    numOfModels = 1106;
-
-    # Processing for each subject
-    print("Processing for each subject ...");
-    for i in range(numOfModels):
-        # Debugging
-        print("\t Processing subject: ", i);
-
-        # Reading model
-        pelvisMesh = sp.readMesh(f"{inputFolder}/{i}-PelvisBoneMesh.ply");
-
-        # Scale the model
-        scaledMesh = sp.scaleMesh(pelvisMesh, 0.001);
-
-        # Save mesh to files
-        sp.saveMeshToPLY(f"{outputFolder}/{i}-PelvisBoneMesh.ply", scaledMesh);
-
-    # Finished processing
-    print("Finished processing.");
-def prepareTemplatePelvis():
-    # Initializing
-    print("Initializing ...");
-
-    # Reading mesh and feautre
-    print("Reading mesh and features ...");
-    tempPelvisBoneMesh = sp.readMesh(templateDataFolder + "/PelvisBoneMesh.off");
-    tempPelvisBoneFeatures = sp.read3DPointsFromPPFile(templateDataFolder + "/PelvisBoneMesh_picked_points.pp");
-
-    # Scale the mesh to meter
-    print("Scale the mesh to meter ...");
-    tempPelvisBoneMesh = sp.scaleMesh(tempPelvisBoneMesh, 0.001);
-    tempPelvisBoneFeatures = sp.scale3DPoints(tempPelvisBoneFeatures, 0.001);
-
-    # Save the scaled value
-    print("Save the scaled value ...");
-    sp.saveMeshToPLY(debugFolder + "/PelvisBoneMesh.off", tempPelvisBoneMesh);
-    sp.save3DPointsToPPFile(debugFolder + "/PelvisBoneMesh_picked_points.pp", tempPelvisBoneFeatures);
-
-    # Finished processing
-    print("Finished processing.");
-def generateTemplatePelvisShape():
-    # Initialize
-    print("Initializing ...");
-    
-    # Reading mesh
-    print("Reading mesh ...");
-    pelvis = sp.readMesh(templateDataFolder + "/PelvisBoneMesh.ply");
-
-    # Estimating the pelvis shape 
-    print("Estimating pelvis shape ...");
-    pelvisShape = sp.estimatePelvisShape(pelvis, 4, 0.001);
-    sp.saveMeshToPLY(debugFolder + "/pelvisShape.ply", pelvisShape);
-
-    # Finished processing
-    print("Finished processing.");
-def generateROIPelvisPartIndices():
-    # Initializing
-    print("Initializing ...");
-
-    # Finished processing
-    print("Finished processing.");
-def generatePelvisShapes():
-    # Initializing
-    print("Initializing ...");
-    if (len(sys.argv) < 3):
-        print("\t Please input the command as the following: [ProgramName] [StartIndex] [EndIndex]"); return;
-    startIndex = int(sys.argv[1]); endIndex = int(sys.argv[2]);
-    disk = "H:";
-    targetFolder = disk + r"\Data\PelvisBoneRecon\FemalePelvisGeometries";
-    outFolder = disk + r"\Data\PelvisBoneRecon\Debugs";
-
-    # Read IDs list
-    print("Read IDs ...");
-    femaleIDs = sp.readListOfStrings(disk + r"\Data\PelvisBoneRecon/FemalePelvisIDs.txt");
-
-    # Processing for each subject
-    print("Processing for each subject ...");
-    for i in range(startIndex, endIndex + 1):
-        # Debugging
-        subjectID = femaleIDs[i];
-        print("\t Processing subject: ", i, "->", subjectID);
-
-        # Reading pelvis bone mesh
-        pelvisBoneMesh = sp.readMesh(targetFolder + f"/{subjectID}-PelvisBoneMesh.ply");
-        sp.saveMeshToPLY(debugFolder + "/pelvisBoneMesh.ply", pelvisBoneMesh);
-
-        # Estimate the shape
-        pelvisBoneShape = sp.estimatePelvisShape(pelvisBoneMesh);
-
-        # Save the pelvis shape
-        sp.saveMeshToPLY(f"{outFolder}/{subjectID}-PelvisBoneShape.ply", pelvisBoneShape);
-
-    # Finished processing
-    print("Finished processing.");
-def getFeaturePointsOfFemalePelvisBoneShape():
-    # Initializing
-    print("Initializing ...");
-    pelvisBoneReconFolder = "H:/Data/PelvisBoneRecon";
-    femalePelvisFolder = pelvisBoneReconFolder + "/FemalePelvisGeometries";
-    postReconFolder = r"H:\Data\PostProcessed";
-    debugFolder = pelvisBoneReconFolder + "/Debugs";
-
-    # Get female pelvis IDs
-    print("Getting female pelvis IDs ...");
-    pelvisIDs = sp.readListOfStrings(pelvisBoneReconFolder + "/FemalePelvisIDs.txt");
-    numOfSubjects = len(pelvisIDs);    
-    
-    # Getting pelvis feature for all subjects
-    print("Getting pelvis features for all subjects ...");
-    for i in range(numOfSubjects):
-        # Debugging
-        pelvisID = pelvisIDs[i];
-        print("Processing subject: ", pelvisIDs[i]);
-
-        # Reading features
-        originSpinoPelvicFeatures = sp.read3DPointsFromPPFile(f"{postReconFolder}/{pelvisID}-SpinopelvicBoneMesh_picked_points.pp");
-        transFeatures = sp.read3DPointsFromPPFile(femalePelvisFolder + f"/{pelvisID}-PelvisBoneMesh_picked_points.pp");
-        
-        # Estimate translation matrix
-        transMatrix = sp.estimateRigidSVDTransform(originSpinoPelvicFeatures[0:22], transFeatures);
-
-        # Transform original features
-        transSpinoPelvicFeatures = sp.transform3DPoints(originSpinoPelvicFeatures, transMatrix);
-        transPelvicFeatures = transSpinoPelvicFeatures[0:23];
-
-        # Save to the feature folder
-        sp.save3DPointsToPPFile(f"{debugFolder}/{pelvisID}-PelvisBoneMesh_picked_points.pp", transPelvicFeatures)
-
-    # Finished processing
-    print("Finished processing.");
-def normalizeFemalePelvisBoneShapes_centroidToOrigin():
-    # Initializing
-    print("Initializing ...");
-    pelvisReconFolder = r"H:\Data\PelvisBoneRecon";
-    pelvisGeoFolder = pelvisReconFolder + "/FemalePelvisGeometries";
-    debugFolder = pelvisReconFolder + "/Debugs";
-
-    # Reading female pelvis ids
-    print("Getting female pelvis ids ...");
-    femalePelvisIDs = sp.readListOfStrings(pelvisReconFolder + "/FemalePelvisIDs.txt");
-    numOfSujects = len(femalePelvisIDs);
-
-    # Register all pelvis to the original coordinate system
-    print("Register all pelvis to the original coordinate system ...");
-    for i, sID in enumerate(femalePelvisIDs):
-        # Debugging
-        print("\t Processing subject: ", sID);
-
-        # Reading features
-        features = sp.read3DPointsFromPPFile(pelvisGeoFolder + f"/{sID}-PelvisBoneMesh_picked_points.pp");
-
-        # Compute feature centroid
-        featureCentroid = sp.computeCentroidPoint(features);
-        orginCentroid = np.array([0, 0, 0]);
-
-        # Estimate transform matrix
-        transMatrix = sp.estimateTranslationMatrixFromSourceToTargetPoint(featureCentroid, orginCentroid);
-
-        # Reading pelvis bone mesh and transform to the origin
-        originPelvisMesh = sp.readMesh(pelvisGeoFolder + f"/{sID}-PelvisBoneMesh.ply");
-        originPelvisShape = sp.readMesh(pelvisGeoFolder + f"/{sID}-PelvisBoneShape.ply")
-
-        # Transform the meshes and feature points
-        transPelvisMesh = sp.transformMesh(originPelvisMesh, transMatrix);
-        transPelvisShape = sp.transformMesh(originPelvisShape, transMatrix);
-        transFeatures = sp.transform3DPoints(features, transMatrix);
-
-        # Save mesh to debug folder
-        sp.saveMeshToPLY(debugFolder + f"/{sID}-PelvisBoneMesh.ply", transPelvisMesh);
-        sp.saveMeshToPLY(debugFolder + f"/{sID}-PelvisBoneShape.ply", transPelvisShape);
-        sp.save3DPointsToPPFile(debugFolder + f"/{sID}-PelvisBoneMesh_picked_points.pp", transFeatures)
-
-    # Finished processing
-    print("Finished processing.");
-def normalizeFemalePelvisBoneShapes_toFirstFeatures():
-    # Initializing
-    print("Initializing ...");
-    pelvisReconFolder = r"H:\Data\PelvisBoneRecon";
-    pelvisGeoFolder = pelvisReconFolder + "/FemalePelvisGeometries";
-    debugFolder = pelvisReconFolder + "/Debugs";
-
-    # Reading female pelvis ids
-    print("Getting female pelvis ids ...");
-    femalePelvisIDs = sp.readListOfStrings(pelvisReconFolder + "/FemalePelvisIDs.txt");
-    numOfSujects = len(femalePelvisIDs);
-
-    # Reading first feature set
-    print("Reading first feature set ...");
-    firstFeatures = sp.read3DPointsFromPPFile(pelvisGeoFolder + f"/{femalePelvisIDs[0]}-PelvisBoneMesh_picked_points.pp");
-
-    # Register all pelvis to the original coordinate system
-    print("Register all pelvis to the original coordinate system ...");
-    for i, sID in enumerate(femalePelvisIDs):
-        # Debugging
-        print("\t Processing subject: ", sID);
-
-        # Reading features
-        originFeatures = sp.read3DPointsFromPPFile(pelvisGeoFolder + f"/{sID}-PelvisBoneMesh_picked_points.pp");        
-        originPelvisMesh = sp.readMesh(pelvisGeoFolder + f"/{sID}-PelvisBoneMesh.ply");
-        originPelvisShape = sp.readMesh(pelvisGeoFolder + f"/{sID}-PelvisBoneShape.ply")
-
-        # Estimate transform matrix
-        transMatrix = sp.estimateRigidSVDTransform(originFeatures, firstFeatures);
-
-        # Transform the meshes and feature points
-        transPelvisMesh = sp.transformMesh(originPelvisMesh, transMatrix);
-        transPelvisShape = sp.transformMesh(originPelvisShape, transMatrix);
-        transFeatures = sp.transform3DPoints(originFeatures, transMatrix);
-
-        # Save mesh to debug folder
-        sp.saveMeshToPLY(debugFolder + f"/{sID}-PelvisBoneMesh.ply", transPelvisMesh);
-        sp.saveMeshToPLY(debugFolder + f"/{sID}-PelvisBoneShape.ply", transPelvisShape);
-        sp.save3DPointsToPPFile(debugFolder + f"/{sID}-PelvisBoneMesh_picked_points.pp", transFeatures)
-
-    # Finished processing
-    print("Finished processing.");
-def normalizePelvisBoneShapes_centroidToOrigin():
-    # Initializing
-    print("Initializing ...");
-    pelvisReconFolder = r"H:\Data\PelvisBoneRecon";
-    pelvisGeoFolder = pelvisReconFolder + "/PelvisGeometries";
-    debugFolder = pelvisReconFolder + "/Debugs";
-
-    # Reading subject IDs
-    print("Reading subject IDs ...");
-    subjectIDs = sp.readListOfStrings(pelvisReconFolder + "/PelvisIDs.txt");
-
-    # Processing for each subject
-    print("Processing for each subject ...");
-    for i, sID in enumerate(subjectIDs):
-        # Debugging
-        print("\t Processing subject: ", i, " with ID: ", sID);
-
-        # Reading pelvis
-        originPelvis = sp.readMesh(pelvisGeoFolder + f"/{sID}-PelvisBoneMesh.ply");
-        originPelvisShape = sp.readMesh(pelvisGeoFolder + f"/{sID}-PelvisBoneShape.ply");
-
-        # Compute centroid points
-        originPelvisCentroid = sp.computeCentroidPoint(originPelvis.vertices);
-
-        # Estimate transform matrix
-        transMatrix = sp.estimateTranslationMatrixFromSourceToTargetPoint(originPelvisCentroid, np.array([0, 0, 0]));
-
-        # Transform pelvis
-        transPelvis = sp.transformMesh(originPelvis, transMatrix);
-        transPelvisShape = sp.transformMesh(originPelvisShape, transMatrix);
-
-        # Save the pelvis
-        sp.saveMeshToPLY(debugFolder + f"/{sID}-PelvisBoneMesh.ply", transPelvis);
-        sp.saveMeshToPLY(debugFolder + f"/{sID}-PelvisBoneShape.ply", transPelvisShape);
-    
-    # Finished processing
-    print("Finished processing.");
-def deformTemplatePelvisToTargetPelvis():
-    # Initialize
-    print("Initializing ...");
-    def computeBarycentricLandmarks(mesh: trimesh.Trimesh, landmarkPoints: np.ndarray):
-        """
-        Given 3D landmark points and a mesh, compute the triangle indices and
-        barycentric coordinates for use in trimesh.registration.nricp_amberg.
-
-        Args:
-            mesh (trimesh.Trimesh): The mesh where landmarks will be localized.
-            landmarkPoints (np.ndarray): (n, 3) array of 3D landmark points.
-
-        Returns:
-            tuple:
-                triIndices (np.ndarray): (n,) int array of triangle indices.
-                baryCoords (np.ndarray): (n, 3) float array of barycentric coordinates.
-        """
-        closest = trimesh.proximity.closest_point(mesh, landmarkPoints)
-        triIndices = closest[2]      # (n,) array of triangle indices
-        
-        baryCoords = []
-        for point, triIndex in zip(landmarkPoints, triIndices):
-            triVerts = mesh.triangles[triIndex]  # shape (3, 3)
-            v0, v1, v2 = triVerts
-
-            # Compute barycentric coordinates
-            T = np.column_stack([v1 - v0, v2 - v0])
-            v = point - v0
-            A = np.dot(T.T, T)
-            b = np.dot(T.T, v)
-
-            try:
-                x = np.linalg.solve(A, b)
-            except np.linalg.LinAlgError:
-                x = np.zeros(2)
-
-            w1 = 1.0 - x[0] - x[1]
-            w2 = x[0]
-            w3 = x[1]
-            baryCoords.append([w1, w2, w3])
-
-        return np.array(triIndices), np.array(baryCoords)
-    def reconstructLandmarksFromBaryCentric(mesh: trimesh.Trimesh, triIndices: np.ndarray, baryCoords: np.ndarray) -> np.ndarray:
-        """
-        Reconstruct 3D points from barycentric coordinates and triangle indices.
-
-        Args:
-            mesh (trimesh.Trimesh): The source mesh.
-            triIndices (np.ndarray): (n,) array of triangle indices.
-            baryCoords (np.ndarray): (n, 3) array of barycentric coordinates.
-
-        Returns:
-            np.ndarray: (n, 3) array of reconstructed 3D points.
-        """
-        if triIndices.shape[0] != baryCoords.shape[0]:
-            raise ValueError("triIndices and baryCoords must have the same number of entries.")
-
-        # Get the triangles from the mesh
-        tris = mesh.triangles[triIndices]  # shape (n, 3, 3)
-
-        # Unpack vertices: V = w1*V0 + w2*V1 + w3*V2
-        v0 = tris[:, 0, :]  # (n, 3)
-        v1 = tris[:, 1, :]
-        v2 = tris[:, 2, :]
-
-        w1 = baryCoords[:, 0][:, np.newaxis]
-        w2 = baryCoords[:, 1][:, np.newaxis]
-        w3 = baryCoords[:, 2][:, np.newaxis]
-
-        points = w1 * v0 + w2 * v1 + w3 * v2  # (n, 3)
-        return points
-    templateFolder = r"H:\Data\Template";
-    pelvisReconFolder = r"H:\Data\PelvisBoneRecon";
-    pelvisGeoFolder = pelvisReconFolder + "/FemalePelvisGeometries";
-    debugFolder = pelvisReconFolder + "/Debugs";
-
-    # Getting template information
-    print("Getting template information ...");
-    tempShape = sp.readMesh(templateFolder + "/TemplatePelvisCoarseShape.ply");
-    tempFeatures = sp.read3DPointsFromPPFile(templateFolder + "/TempPelvisBoneMesh_picked_points.pp");
-    defShape = sp.cloneMesh(tempShape);
-    defFeatures = tempFeatures.copy();
-    defFeatureBaryIndices, defFeatureBaryCoords = computeBarycentricLandmarks(defShape, defFeatures);
-
-    # Reading target geometries
-    print("Reading target geometries ...");
-    targetShape = sp.readMesh(pelvisGeoFolder + "/100131-PelvisBoneShape.ply");
-    targetFeatures = sp.read3DPointsFromPPFile(pelvisGeoFolder + "/100131-PelvisBoneMesh_picked_points.pp");
-
-    # Deform using the rigid transform 
-    print("Deform using the rigid transform ...");
-    svdTransform = sp.estimateRigidSVDTransform(defFeatures, targetFeatures);
-    defShape = sp.transformMesh(defShape, svdTransform);
-    defFeatures = reconstructLandmarksFromBaryCentric(defShape, defFeatureBaryIndices, defFeatureBaryCoords);
-
-    # Deform with affine transform 
-    print("Deform with affine transform ...");
-    affineTransform = sp.estimateAffineTransformCPD(defFeatures, targetFeatures);
-    defShape = sp.transformMesh(defShape, affineTransform);
-
-    # Deform using the non-rigid ICP registration
-    print("Deform using the non-rigid ICP registration ...");
-    defShapeVertices = trimesh.registration.nricp_amberg(
-        source_mesh=defShape,
-        target_geometry=targetShape,
-        source_landmarks=(defFeatureBaryIndices, defFeatureBaryCoords),
-        target_positions=targetFeatures
-    )
-
-    # Deform using the cage-based deformation
-    print("Deforming using the cage-based deformation ...");
-    defShape.vertices = defShapeVertices;
-    defShape.vertices = sp.estimateNearestPointsFromPoints(defShape.vertices, targetShape.vertices);
-
-    # Debugging
-    print("Debugging ...");
-    sp.saveMeshToPLY(debugFolder + "/defShape.ply", defShape);
-
-    # Finished processing
-    print("Finished processing.");
-def deformTemplatePelvisToTargetPelvis_allData_usingGlobalFeatureMeshDeformation():
-    # Initializing
-    print("Initializing ...");
-    if (len(sys.argv) < 3):
-        print("\t Please input the command as the following: [ProgramName] [StartIndex] [EndIndex]"); return;
-    startIndex = int(sys.argv[1]); endIndex = int(sys.argv[2]);
-    processingDisk = "G:";
-    templateFolder = processingDisk + r"\Data\Template";
-    pelvisBoneMuscleTempFolder = templateFolder + "/PelvisBonesMuscles";
-    pelvisReconFolder = processingDisk +  r"\Data\PelvisBoneRecon";
-    femalePelvisFolder = pelvisReconFolder + r"\FemalePelvisGeometries";
-    debugFolder = processingDisk + r"\Data\PelvisBoneRecon\Debugs";
-
-    # Reading processing IDs
-    print("Reading processing IDs ...");
-    processingIDs = sp.readListOfStrings(pelvisReconFolder + "/FemalePelvisIDs.txt");
-
-    # Getting template information
-    print("Getting template information ...");
-    tempPelvisBoneMuscleMesh = sp.readMesh(pelvisBoneMuscleTempFolder + "/TempPelvisBoneMuscles.ply");
-    tempPelvisMesh = sp.readMesh(pelvisBoneMuscleTempFolder + "/TempPelvisBoneMesh.ply");
-    tempPelvisMuscleMesh = sp.readMesh(pelvisBoneMuscleTempFolder + "/TempPelvisMuscles.ply");
-    tempWithoutJointPelvisMesh = sp.readMesh(pelvisBoneMuscleTempFolder + "/TempPelvisBoneMeshWithOutJoints.ply");    
-    tempLeftSacroiliacJointMesh = sp.readMesh(pelvisBoneMuscleTempFolder + "/TempPelvisBoneMesh_LeftSacroiliacJoint.ply");
-    tempRightSacroiliacJointMesh = sp.readMesh(pelvisBoneMuscleTempFolder + "/TempPelvisBoneMesh_RightSacroiliacJoint.ply");
-    tempPubicJointMesh = sp.readMesh(pelvisBoneMuscleTempFolder + "/TempPelvisBoneMesh_PubicJoint.ply");
-    
-    tempPelvisFeatures = sp.read3DPointsFromPPFile(pelvisBoneMuscleTempFolder + "/TempPelvisBoneMesh_picked_points.pp");
-
-    pelvisFeatureBaryIndicesOnMesh, pelvisFeatureBaryCoordsOnMesh = sp.computeBarycentricLandmarks(tempWithoutJointPelvisMesh, tempPelvisFeatures);
-    withoutJointPelvisVertexIndices = sp.estimateNearestIndicesKDTreeBased(tempWithoutJointPelvisMesh.vertices, tempPelvisMesh.vertices);
-    pelvisBoneVertexIndices = sp.estimateNearestIndicesKDTreeBased(tempPelvisMesh.vertices, tempPelvisBoneMuscleMesh.vertices);
-    pelvisMuscleVertexIndices = sp.estimateNearestIndicesKDTreeBased(tempPelvisMuscleMesh.vertices, tempPelvisBoneMuscleMesh.vertices);
-        
-    tempLeftSacroiliacJointFeatures = sp.read3DPointsFromPPFile(pelvisBoneMuscleTempFolder + "/TempPelvisBoneMesh_LeftSacroiliacJoint_picked_points.pp");
-    tempRightSacroiliacJointFeatures = sp.read3DPointsFromPPFile(pelvisBoneMuscleTempFolder + "/TempPelvisBoneMesh_RightSacroiliacJoint_picked_points.pp");
-    tempPubicJointFeatures = sp.read3DPointsFromPPFile(pelvisBoneMuscleTempFolder + "/TempPelvisBoneMesh_PubicJoint_picked_points.pp");
-    tempPelvisMuscleFeatures = sp.read3DPointsFromPPFile(pelvisBoneMuscleTempFolder + "/TempPelvisMuscles_picked_points.pp");
-
-    leftSacroiliacJointFeatureBaryIndices, leftSacroiliacJointFeatureBaryCoords = sp.computeBarycentricLandmarks(tempWithoutJointPelvisMesh, tempLeftSacroiliacJointFeatures);
-    rightSacroiliacJointFeatureBaryIndices, rightSacroiliacJointFeatureBaryCoords = sp.computeBarycentricLandmarks(tempWithoutJointPelvisMesh, tempRightSacroiliacJointFeatures);
-    pubicJointFeatureBaryIndices, pubicJointFeatureBaryCoords = sp.computeBarycentricLandmarks(tempWithoutJointPelvisMesh, tempPubicJointFeatures);
-    pelvisMuscleFeatureBaryIndices, pelvisMuscleFeatureBaryCoords = sp.computeBarycentricLandmarks(tempPelvisMesh, tempPelvisMuscleFeatures);
-    
-    leftSacroiliacJointFeatureBaryIndices = sp.transferFaceIndicesToOtherMesh(leftSacroiliacJointFeatureBaryIndices, tempWithoutJointPelvisMesh, tempPelvisMesh);
-    rightSacroiliacJointFeatureBaryIndices = sp.transferFaceIndicesToOtherMesh(rightSacroiliacJointFeatureBaryIndices, tempWithoutJointPelvisMesh, tempPelvisMesh);
-    pubicJointFeatureBaryIndices = sp.transferFaceIndicesToOtherMesh(pubicJointFeatureBaryIndices, tempWithoutJointPelvisMesh, tempPelvisMesh);
-        
-    leftSacroiliacJointVertexIndices = sp.readIndicesFromCSVFile(pelvisBoneMuscleTempFolder + "/LeftSacroiliacJointVertexIndices.csv");
-    rightSacroiliacJointVertexIndices = sp.readIndicesFromCSVFile(pelvisBoneMuscleTempFolder + "/RightSacroiliacJointVertexIndices.csv");
-    pubicJointVertexIndices = sp.readIndicesFromCSVFile(pelvisBoneMuscleTempFolder + "/PubicJointVertexIndices.csv");
-
-    # Checking for each subject
-    print("Checking for each subject ...");
-    for i in range(startIndex, endIndex + 1):
-        # Debugging 
-        sID = processingIDs[i];
-        print("/****************************************** Processing subject: ", i, " with ID: ", sID);
-
-        # Reading target information
-        print("Reading target information ...");
-        targetPelvisMesh = sp.readMesh(femalePelvisFolder + f"/{sID}-PelvisBoneMesh.ply");
-        targetPelvisFeatures = sp.read3DPointsFromPPFile(femalePelvisFolder + f"/{sID}-PelvisBoneMesh_picked_points.pp");
-
-        # Fixing the target information
-        print("Fixing the target information ...");
-        targetPelvisMesh = sp.fixMesh(targetPelvisMesh);
-
-        # Prepare the deformation buffer
-        print("Preparing the deformation buffer ...");
-        deformedWithoutJointPelvisMesh = sp.cloneMesh(tempWithoutJointPelvisMesh);
-        deformedLeftSacroiliacJointMesh = sp.cloneMesh(tempLeftSacroiliacJointMesh);
-        deformedRightSacroiliacJointMesh = sp.cloneMesh(tempRightSacroiliacJointMesh);
-        deformedPubicJointMesh = sp.cloneMesh(tempPubicJointMesh);
-        deformedPelvisMuscleMesh = sp.cloneMesh(tempPelvisMuscleMesh);
-        defPelFeatures = tempPelvisFeatures.copy();
-        
-        # Deform using the rigid transform 
-        print("Deform using the rigid transform ...");
-        svdTransform = sp.estimateRigidSVDTransform(defPelFeatures, targetPelvisFeatures);
-        deformedWithoutJointPelvisMesh.vertices = sp.transform3DPoints(deformedWithoutJointPelvisMesh.vertices, svdTransform);
-        deformedLeftSacroiliacJointMesh.vertices = sp.transform3DPoints(deformedLeftSacroiliacJointMesh.vertices, svdTransform);
-        deformedRightSacroiliacJointMesh.vertices = sp.transform3DPoints(deformedRightSacroiliacJointMesh.vertices, svdTransform);
-        deformedPubicJointMesh.vertices = sp.transform3DPoints(deformedPubicJointMesh.vertices, svdTransform);
-        deformedPelvisMuscleMesh.vertices = sp.transform3DPoints(deformedPelvisMuscleMesh.vertices, svdTransform);
-        defPelFeatures = sp.transform3DPoints(defPelFeatures, svdTransform);
-        
-        # Deform with affine transform 
-        print("Deform with affine transform ...");
-        affineTransform = sp.estimateAffineTransformCPD(defPelFeatures, targetPelvisFeatures);
-
-        deformedWithoutJointPelvisMesh.vertices = sp.transform3DPoints(deformedWithoutJointPelvisMesh.vertices, affineTransform);
-        deformedLeftSacroiliacJointMesh.vertices = sp.transform3DPoints(deformedLeftSacroiliacJointMesh.vertices, affineTransform);
-        deformedRightSacroiliacJointMesh.vertices = sp.transform3DPoints(deformedRightSacroiliacJointMesh.vertices, affineTransform);
-        deformedPubicJointMesh.vertices = sp.transform3DPoints(deformedPubicJointMesh.vertices, affineTransform);
-
-        deformedPelvisMesh = sp.cloneMesh(tempPelvisMesh);
-        deformedPelvisMesh.vertices[withoutJointPelvisVertexIndices] = deformedWithoutJointPelvisMesh.vertices;
-        deformedPelvisMesh.vertices[leftSacroiliacJointVertexIndices] = deformedLeftSacroiliacJointMesh.vertices;
-        deformedPelvisMesh.vertices[rightSacroiliacJointVertexIndices] = deformedRightSacroiliacJointMesh.vertices;
-        deformedPelvisMesh.vertices[pubicJointVertexIndices] = deformedPubicJointMesh.vertices;
-
-        # Deform using non rigid ICP
-        print("Deform using non rigid ICP ...");
-        personalizedWithoutJointPelvisVertices = trimesh.registration.nricp_amberg(
-            source_mesh=deformedWithoutJointPelvisMesh,
-            target_geometry=targetPelvisMesh,
-            source_landmarks=(pelvisFeatureBaryIndicesOnMesh, pelvisFeatureBaryCoordsOnMesh),
-            target_positions=targetPelvisFeatures
-        )
-
-        # Try to deform the joints based on the deformed pelvis mesh
-        print("Try to deform the joints based on the deformed pelvis mesh ...");
-        personalizedPelvisMesh = sp.cloneMesh(tempPelvisMesh);
-        personalizedPelvisMesh.vertices[withoutJointPelvisVertexIndices] = personalizedWithoutJointPelvisVertices;
-
-        deformedLeftSacroiliacJointFeatures = sp.reconstructLandmarksFromBarycentric(deformedPelvisMesh, leftSacroiliacJointFeatureBaryIndices, leftSacroiliacJointFeatureBaryCoords);
-        deformedRightSacroiliacJointFeatures = sp.reconstructLandmarksFromBarycentric(deformedPelvisMesh, rightSacroiliacJointFeatureBaryIndices, rightSacroiliacJointFeatureBaryCoords);
-        deformedPubicJointFeatures = sp.reconstructLandmarksFromBarycentric(deformedPelvisMesh, pubicJointFeatureBaryIndices, pubicJointFeatureBaryCoords);
-        
-        personalizedLeftSacroiliacJointFeatures = sp.reconstructLandmarksFromBarycentric(personalizedPelvisMesh, leftSacroiliacJointFeatureBaryIndices, leftSacroiliacJointFeatureBaryCoords);
-        personalizedRightSacroiliacJointFeatures = sp.reconstructLandmarksFromBarycentric(personalizedPelvisMesh, rightSacroiliacJointFeatureBaryIndices, rightSacroiliacJointFeatureBaryCoords);
-        personalizedPubicJointFeatures = sp.reconstructLandmarksFromBarycentric(personalizedPelvisMesh, pubicJointFeatureBaryIndices, pubicJointFeatureBaryCoords);
-        
-        deformedToPersonalizedLeftSacroiliacJointFeatureDisplacements =  personalizedLeftSacroiliacJointFeatures - deformedLeftSacroiliacJointFeatures;
-        rbf = RBFInterpolator(deformedLeftSacroiliacJointFeatures, deformedToPersonalizedLeftSacroiliacJointFeatureDisplacements, kernel='thin_plate_spline');
-        personalizedLeftSacroiliacJointMeshVertexDisplacements = rbf(deformedLeftSacroiliacJointMesh.vertices);
-        personalizedLeftSacroiliacJointMesh = sp.cloneMesh(deformedLeftSacroiliacJointMesh);
-        personalizedLeftSacroiliacJointMesh.vertices = deformedLeftSacroiliacJointMesh.vertices + personalizedLeftSacroiliacJointMeshVertexDisplacements;
-        
-        deformedToPersonalizedRightSacroiliacJointFeatureDisplacements = personalizedRightSacroiliacJointFeatures - deformedRightSacroiliacJointFeatures;
-        rbf = RBFInterpolator(deformedRightSacroiliacJointFeatures, deformedToPersonalizedRightSacroiliacJointFeatureDisplacements, kernel='thin_plate_spline');
-        personalizedRightSacroiliacJointMeshVertexDisplacements = rbf(deformedRightSacroiliacJointMesh.vertices);
-        personalizedRightSacroiliacJointMesh = sp.cloneMesh(deformedRightSacroiliacJointMesh);
-        personalizedRightSacroiliacJointMesh.vertices = deformedRightSacroiliacJointMesh.vertices + personalizedRightSacroiliacJointMeshVertexDisplacements;
-        
-        deformedToPersonalizedPubicJointFeatureDisplacements = personalizedPubicJointFeatures - deformedPubicJointFeatures;
-        rbf = RBFInterpolator(deformedPubicJointFeatures, deformedToPersonalizedPubicJointFeatureDisplacements, kernel='thin_plate_spline');
-        personalizedPubicJointMeshVertexDisplacements = rbf(deformedPubicJointMesh.vertices);
-        personalizedPubicJointMesh = sp.cloneMesh(deformedPubicJointMesh);
-        personalizedPubicJointMesh.vertices = deformedPubicJointMesh.vertices + personalizedPubicJointMeshVertexDisplacements;
-        
-        personalizedPelvisMesh.vertices[leftSacroiliacJointVertexIndices] = personalizedLeftSacroiliacJointMesh.vertices;
-        personalizedPelvisMesh.vertices[rightSacroiliacJointVertexIndices] = personalizedRightSacroiliacJointMesh.vertices;
-        personalizedPelvisMesh.vertices[pubicJointVertexIndices] = personalizedPubicJointMesh.vertices;
-
-        # Try to deform pelvis muscle to the personalized pelvis mesh
-        print("Try to deform pelvis muscle to the personalized pelvis mesh ..");
-        deformedPelvisMuscleFeatures = sp.reconstructLandmarksFromBarycentric(deformedPelvisMesh, pelvisMuscleFeatureBaryIndices, pelvisMuscleFeatureBaryCoords);
-        personalizedPelvisMusceFeatures = sp.reconstructLandmarksFromBarycentric(personalizedPelvisMesh, pelvisMuscleFeatureBaryIndices, pelvisMuscleFeatureBaryCoords);
-        deformedToPersonalizedPelvisMuscleFeatureDisplacements = personalizedPelvisMusceFeatures - deformedPelvisMuscleFeatures;
-        rbf = RBFInterpolator(deformedPelvisMuscleFeatures, deformedToPersonalizedPelvisMuscleFeatureDisplacements, kernel='thin_plate_spline');        
-        personalizedPelvisMuscleVertexDisplacements = rbf(deformedPelvisMuscleMesh.vertices);
-        personalizedPelvisMuscleMesh = sp.cloneMesh(deformedPelvisMuscleMesh);
-        personalizedPelvisMuscleMesh.vertices = deformedPelvisMuscleMesh.vertices + personalizedPelvisMuscleVertexDisplacements;
-
-        # Comptue the personalized pelvis muscle meshes
-        print("Computing the personalized pelvis muscle meshes ...");
-        personalizedPelvisBoneMuscleMesh = sp.cloneMesh(tempPelvisBoneMuscleMesh);
-        personalizedPelvisBoneMuscleMesh.vertices[pelvisBoneVertexIndices] = personalizedPelvisMesh.vertices;
-        personalizedPelvisBoneMuscleMesh.vertices[pelvisMuscleVertexIndices] = personalizedPelvisMuscleMesh.vertices;
-       
-        # Save the personalized mesh
-        print("Save the personalized mesh ...");
-        sp.saveMeshToPLY(debugFolder + f"/{sID}-PersonalizedPelvisBoneMuscleMesh_GB.ply", personalizedPelvisBoneMuscleMesh)
-        
-    # Finished 
-    print("Finished.");
-def deformTemplatePelvisToTargetPelvis_allData_usingROIFeatureShapeAndMeshDeformation():
-    # Initializing
-    print("Initializing ...");
-    if (len(sys.argv) < 3):
-        print("\t Please input the command as the following: [ProgramName] [StartIndex] [EndIndex]"); return;
-    startIndex = int(sys.argv[1]); endIndex = int(sys.argv[2]);    
-    processingDisk = "H:/SpinalPelvisPred";
-    templateFolder = processingDisk + "/Data/Template";
-    pelvisBoneMuscleTempFolder = templateFolder + "/PelvisBonesMuscles";
-    pelvisReconFolder = processingDisk +  "/Data/PelvisBoneRecon";
-    targetPelvisFolder = pelvisReconFolder + "/FemalePelvisGeometries/1KPelvisData";
-    debugFolder = processingDisk + "/Data/PelvisBoneRecon/Debugs";
-
-    # Reading processing IDs
-    print("Reading processing IDs ...");
-    processingIDs = sp.readListOfStrings(pelvisReconFolder + "/FemalePelvisGeometries/1KPelvisDataFemalePelvisIDs.txt");
-
-    # Getting template information
-    print("Getting template information ...");
-    tempPelvisBoneMuscleMesh = sp.readMesh(pelvisBoneMuscleTempFolder + "/TempPelvisBoneMuscles.ply");
-    tempPelvisMuscleMesh = sp.readMesh(pelvisBoneMuscleTempFolder + "/TempPelvisMuscles.ply");
-    tempPelvisShape = sp.readMesh(pelvisBoneMuscleTempFolder + "/TemplatePelvisCoarseShape.ply");
-    tempPelvisMesh = sp.readMesh(pelvisBoneMuscleTempFolder + "/TempPelvisBoneMesh.ply");
-    tempWithoutJointPelvisMesh = sp.readMesh(pelvisBoneMuscleTempFolder + "/TempPelvisBoneMeshWithOutJoints.ply");
-    tempLeftIliumMesh = sp.readMesh(pelvisBoneMuscleTempFolder + "/TempPelvisBoneMesh_LeftIlium.ply");
-    tempRightIliumMesh = sp.readMesh(pelvisBoneMuscleTempFolder + "/TempPelvisBoneMesh_RightIlium.ply");
-    tempSacrumMesh = sp.readMesh(pelvisBoneMuscleTempFolder + "/TempPelvisBoneMesh_Sacrum.ply");
-    tempLeftSacroiliacJointMesh = sp.readMesh(pelvisBoneMuscleTempFolder + "/TempPelvisBoneMesh_LeftSacroiliacJoint.ply");
-    tempRightSacroiliacJointMesh = sp.readMesh(pelvisBoneMuscleTempFolder + "/TempPelvisBoneMesh_RightSacroiliacJoint.ply");
-    tempPubicJointMesh = sp.readMesh(pelvisBoneMuscleTempFolder + "/TempPelvisBoneMesh_PubicJoint.ply");
-    
-    tempPelvisFeatures = sp.read3DPointsFromPPFile(pelvisBoneMuscleTempFolder + "/TempPelvisBoneMesh_picked_points.pp");
-    pelvisFeatureBaryIndicesOnShape, pelvisFeatureBaryCoordsOnShape = sp.computeBarycentricLandmarks(tempPelvisShape, tempPelvisFeatures);
-    pelvisFeatureBaryIndicesOnMesh, pelvisFeatureBaryCoordsOnMesh = sp.computeBarycentricLandmarks(tempPelvisMesh, tempPelvisFeatures);
-    
-    leftIliumFeatureIndices = sp.readIndicesFromCSVFile(pelvisBoneMuscleTempFolder + "/LeftIliumFeatureIndices.csv");
-    rightIliumFeatureIndices = sp.readIndicesFromCSVFile(pelvisBoneMuscleTempFolder + "/RightIliumFeatureIndices.csv");
-    sacrumFeatureIndices = sp.readIndicesFromCSVFile(pelvisBoneMuscleTempFolder + "/SacrumFeatureIndices.csv");
-    
-    tempLeftSacroiliacJointFeatures = sp.read3DPointsFromPPFile(pelvisBoneMuscleTempFolder + "/TempPelvisBoneMesh_LeftSacroiliacJoint_picked_points.pp");
-    tempRightSacroiliacJointFeatures = sp.read3DPointsFromPPFile(pelvisBoneMuscleTempFolder + "/TempPelvisBoneMesh_RightSacroiliacJoint_picked_points.pp");
-    tempPubicJointFeatures = sp.read3DPointsFromPPFile(pelvisBoneMuscleTempFolder + "/TempPelvisBoneMesh_PubicJoint_picked_points.pp");
-    tempPelvisMuscleFeatures = sp.read3DPointsFromPPFile(pelvisBoneMuscleTempFolder + "/TempPelvisMuscles_picked_points.pp");
-
-    leftSacroiliacJointFeatureBaryIndices, leftSacroiliacJointFeatureBaryCoords = sp.computeBarycentricLandmarks(tempWithoutJointPelvisMesh, tempLeftSacroiliacJointFeatures);
-    rightSacroiliacJointFeatureBaryIndices, rightSacroiliacJointFeatureBaryCoords = sp.computeBarycentricLandmarks(tempWithoutJointPelvisMesh, tempRightSacroiliacJointFeatures);
-    pubicJointFeatureBaryIndices, pubicJointFeatureBaryCoords = sp.computeBarycentricLandmarks(tempWithoutJointPelvisMesh, tempPubicJointFeatures);
-    pelvisMuscleFeatureBaryIndices, pelvisMuscleFeatureBaryCoords = sp.computeBarycentricLandmarks(tempPelvisMesh, tempPelvisMuscleFeatures);
-    
-    leftSacroiliacJointFeatureBaryIndices = sp.transferFaceIndicesToOtherMesh(leftSacroiliacJointFeatureBaryIndices, tempWithoutJointPelvisMesh, tempPelvisMesh);
-    rightSacroiliacJointFeatureBaryIndices = sp.transferFaceIndicesToOtherMesh(rightSacroiliacJointFeatureBaryIndices, tempWithoutJointPelvisMesh, tempPelvisMesh);
-    pubicJointFeatureBaryIndices = sp.transferFaceIndicesToOtherMesh(pubicJointFeatureBaryIndices, tempWithoutJointPelvisMesh, tempPelvisMesh);
-        
-    pelvisBoneVertexIndices = sp.estimateNearestIndicesKDTreeBased(tempPelvisMesh.vertices, tempPelvisBoneMuscleMesh.vertices);
-    pelvisMuscleVertexIndices = sp.estimateNearestIndicesKDTreeBased(tempPelvisMuscleMesh.vertices, tempPelvisBoneMuscleMesh.vertices);
-    leftIliumVertexIndices = sp.estimateNearestIndicesKDTreeBased(tempLeftIliumMesh.vertices, tempPelvisBoneMuscleMesh.vertices);
-    rightIliumVertexIndices = sp.estimateNearestIndicesKDTreeBased(tempRightIliumMesh.vertices, tempPelvisBoneMuscleMesh.vertices);
-    sacrumVertexIndices = sp.estimateNearestIndicesKDTreeBased(tempSacrumMesh.vertices, tempPelvisBoneMuscleMesh.vertices);
-    leftSacroiliacJointVertexIndices = sp.estimateNearestIndicesKDTreeBased(tempLeftSacroiliacJointMesh.vertices, tempPelvisBoneMuscleMesh.vertices);
-    rightSacroiliacJointVertexIndices = sp.estimateNearestIndicesKDTreeBased(tempRightSacroiliacJointMesh.vertices, tempPelvisBoneMuscleMesh.vertices);
-    pubicJointVertexIndices = sp.estimateNearestIndicesKDTreeBased(tempPubicJointMesh.vertices, tempPelvisBoneMuscleMesh.vertices);    
-    
-    # Checking for each subject
-    print("Checking for each subject ...");
-    for i in range(startIndex, endIndex + 1):
-        # Debugging 
-        sID = processingIDs[i];
-        print("/****************************************** Processing subject: ", i, " with ID: ", sID);
-
-        # Reading target information
-        print("Reading target information ...");
-        targetPelvisShape = sp.readMesh(targetPelvisFolder + f"/{sID}-PelvisBoneShape.ply");
-        targetPelvisMesh = sp.readMesh(targetPelvisFolder + f"/{sID}-PelvisBoneMesh.ply");
-        targetPelvisFeatures = sp.read3DPointsFromPPFile(targetPelvisFolder + f"/{sID}-PelvisBoneMesh_picked_points.pp");
-
-        # Fixing the target information
-        print("Fixing the target information ...");
-        targetPelvisShape = sp.fixMesh(targetPelvisShape);
-        targetPelvisMesh = sp.fixMesh(targetPelvisMesh);
-
-        # Prepare the aligned buffers
-        print("Preparing the aligned buffers ...");
-        alignedPelvisShape = sp.cloneMesh(tempPelvisShape);
-        alignedPelvisFeatures = tempPelvisFeatures.copy();
-        
-        # Deform using the rigid transform 
-        print("Deform using the rigid transform ...");
-        svdTransform = sp.estimateRigidSVDTransform(alignedPelvisFeatures, targetPelvisFeatures);
-        alignedPelvisShape.vertices = sp.transform3DPoints(alignedPelvisShape.vertices, svdTransform);
-        alignedPelvisFeatures = sp.reconstructLandmarksFromBarycentric(alignedPelvisShape, pelvisFeatureBaryIndicesOnShape, pelvisFeatureBaryCoordsOnShape);
-        
-        # Deform with affine transform 
-        print("Deform with affine transform ...");
-        affineTransform = sp.estimateAffineTransformCPD(alignedPelvisFeatures, targetPelvisFeatures);
-        alignedPelvisShape = sp.transformMesh(alignedPelvisShape, affineTransform);
-        del(alignedPelvisFeatures); gc.collect();
-        
-        # Deform using the non-rigid ICP registration
-        print("Deform using the non-rigid ICP registration ...");
-        alignedPelvisShapeVertices = trimesh.registration.nricp_amberg(
-            source_mesh=alignedPelvisShape,
-            target_geometry=targetPelvisShape,
-            source_landmarks=(pelvisFeatureBaryIndicesOnShape, pelvisFeatureBaryCoordsOnShape),
-            target_positions=targetPelvisFeatures
-        )
-        alignedPelvisShape.vertices = alignedPelvisShapeVertices.copy(); 
-        del(alignedPelvisShapeVertices); gc.collect();
-
-        # Project deformed shape to the target shape
-        print("Project deformed shape to the taret shape ...");
-        alignedPelvisShape = sp.projectMeshOntoMesh(alignedPelvisShape, targetPelvisShape);        
-
-        # Deform the template pelvis mesh to def pelvis shape
-        print("Deform template pelvis mesh to def pelvis shape ...");
-        print("\t Using the rigid transform ...");
-        deformedPelvisShape = sp.cloneMesh(tempPelvisShape);
-        deformedPelvisBoneMuscleMesh = sp.cloneMesh(tempPelvisBoneMuscleMesh);
-        svdTransform = sp.estimateRigidSVDTransform(deformedPelvisShape.vertices, alignedPelvisShape.vertices);
-        deformedPelvisShape.vertices = sp.transform3DPoints(deformedPelvisShape.vertices, svdTransform);
-        deformedPelvisBoneMuscleMesh.vertices = sp.transform3DPoints(deformedPelvisBoneMuscleMesh.vertices, svdTransform);
-
-        print("\t Using the non-rigid transform ...");
-        affineTransform = sp.estimateAffineTransformCPD(deformedPelvisShape.vertices, alignedPelvisShape.vertices);
-        deformedPelvisShape.vertices = sp.transform3DPoints(deformedPelvisShape.vertices, affineTransform);
-        deformedPelvisBoneMuscleMesh.vertices = sp.transform3DPoints(deformedPelvisBoneMuscleMesh.vertices, affineTransform);
-
-        print("\t Using the radial basic function ...");
-        deformedToAlignedShapeVertexDisplacements = alignedPelvisShape.vertices - deformedPelvisShape.vertices;
-        rbf = RBFInterpolator(deformedPelvisShape.vertices, deformedToAlignedShapeVertexDisplacements, kernel='thin_plate_spline', smoothing=1e-3);
-        deformedPelvisBoneMuscleVertexDisplacements = rbf(deformedPelvisBoneMuscleMesh.vertices);
-        deformedPelvisBoneMuscleMesh.vertices = deformedPelvisBoneMuscleMesh.vertices + deformedPelvisBoneMuscleVertexDisplacements;
-        del(deformedPelvisShape, deformedToAlignedShapeVertexDisplacements, svdTransform, affineTransform, rbf, deformedPelvisBoneMuscleVertexDisplacements); gc.collect();
-        
-        # Try to deform the pelvis mesh using the ROI shape
-        print("Try to deform the pelvis mesh using the ROI shape ...");
-        ## Getting the ROI meshes
-        print("\t Getting the ROI meshes ...");
-        deformedPelvisMesh = sp.cloneMesh(tempPelvisMesh);
-        deformedPelvisMuscleMesh = sp.cloneMesh(tempPelvisMuscleMesh);
-        deformedLeftIliumMesh = sp.cloneMesh(tempLeftIliumMesh);
-        deformedRightIliumMesh = sp.cloneMesh(tempRightIliumMesh);
-        deformedSacrumMesh = sp.cloneMesh(tempSacrumMesh);
-        deformedLeftSacroiliacJointMesh = sp.cloneMesh(tempLeftSacroiliacJointMesh);
-        deformedRightSacroiliacJointMesh = sp.cloneMesh(tempRightSacroiliacJointMesh);
-        deformedPubicJointMesh = sp.cloneMesh(tempPubicJointMesh);        
-        
-        deformedPelvisMesh.vertices = deformedPelvisBoneMuscleMesh.vertices[pelvisBoneVertexIndices];
-        deformedPelvisMuscleMesh.vertices = deformedPelvisBoneMuscleMesh.vertices[pelvisMuscleVertexIndices];
-        deformedLeftIliumMesh.vertices = deformedPelvisBoneMuscleMesh.vertices[leftIliumVertexIndices];
-        deformedRightIliumMesh.vertices = deformedPelvisBoneMuscleMesh.vertices[rightIliumVertexIndices];
-        deformedSacrumMesh.vertices = deformedPelvisBoneMuscleMesh.vertices[sacrumVertexIndices];
-        deformedLeftSacroiliacJointMesh.vertices = deformedPelvisBoneMuscleMesh.vertices[leftSacroiliacJointVertexIndices];
-        deformedRightSacroiliacJointMesh.vertices = deformedPelvisBoneMuscleMesh.vertices[rightSacroiliacJointVertexIndices];
-        deformedPubicJointMesh.vertices = deformedPelvisBoneMuscleMesh.vertices[pubicJointVertexIndices];
-
-        ## Getting ROI features
-        print("\t Getting the ROI features ...");
-        deformedFullPelvisFeatures = sp.reconstructLandmarksFromBarycentric(deformedPelvisMesh, pelvisFeatureBaryIndicesOnMesh, pelvisFeatureBaryCoordsOnMesh);
-        deformedLeftIliumFeatures = deformedFullPelvisFeatures[leftIliumFeatureIndices];
-        deformedRightIliumFeatures = deformedFullPelvisFeatures[rightIliumFeatureIndices];
-        deformedSacrumFeatures = deformedFullPelvisFeatures[sacrumFeatureIndices];        
-
-        ## Compute bary coords for ROI features
-        print("\t Compute bary coords for ROI features ...");
-        leftIliumFeatureBaryIndices, leftIliumFeatureBaryCoords = sp.computeBarycentricLandmarks(deformedLeftIliumMesh, deformedLeftIliumFeatures);
-        rightIliumFeatureBaryIndices, rightIliumFeatureBaryCoords = sp.computeBarycentricLandmarks(deformedRightIliumMesh, deformedRightIliumFeatures);
-        sacrumFeatureBaryIndices, sacrumFeatureBaryCoords = sp.computeBarycentricLandmarks(deformedSacrumMesh, deformedSacrumFeatures);
-        
-        ## Compute the target ROI features
-        print("\t Compute target ROI features ...");
-        targetLeftIliumFeatures = targetPelvisFeatures[leftIliumFeatureIndices];
-        targetRightIliumFeatures = targetPelvisFeatures[rightIliumFeatureIndices];
-        targetSacrumFeatures = targetPelvisFeatures[sacrumFeatureIndices];
-
-        ## Deform leftIliumMesh to the target mesh
-        print("\t Deform leftIliumMesh to the target mesh ...");
-        personalizedLeftIliumMeshVertices = trimesh.registration.nricp_amberg(
-            source_mesh=deformedLeftIliumMesh,
-            target_geometry=targetPelvisMesh,
-            source_landmarks=(leftIliumFeatureBaryIndices, leftIliumFeatureBaryCoords),
-            target_positions=targetLeftIliumFeatures
-        )
-        personalizedLeftIliumMesh = sp.cloneMesh(deformedLeftIliumMesh);
-        personalizedLeftIliumMesh.vertices = personalizedLeftIliumMeshVertices.copy();
-        del(personalizedLeftIliumMeshVertices); gc.collect();
-
-        ## Deform rightIliumMesh to the target mesh
-        print("\t Deform rightIliumMesh to the target mesh ...");
-        personalizedRightIliumMeshVertices = trimesh.registration.nricp_amberg(
-            source_mesh=deformedRightIliumMesh,
-            target_geometry=targetPelvisMesh,
-            source_landmarks=(rightIliumFeatureBaryIndices, rightIliumFeatureBaryCoords),
-            target_positions=targetRightIliumFeatures
-        )
-        personalizedRightIliumMesh = sp.cloneMesh(deformedRightIliumMesh);
-        personalizedRightIliumMesh.vertices = personalizedRightIliumMeshVertices.copy();
-        del(personalizedRightIliumMeshVertices); gc.collect();
-
-        ## Deform sacrum to the target mesh
-        print("\t Deform sacrum to the target mesh ...");
-        personalizedSacrumMeshVertices = trimesh.registration.nricp_amberg(
-            source_mesh=deformedSacrumMesh,
-            target_geometry=targetPelvisMesh,
-            source_landmarks=(sacrumFeatureBaryIndices, sacrumFeatureBaryCoords),
-            target_positions=targetSacrumFeatures
-        )
-        personalizedSacrumMesh = sp.cloneMesh(deformedSacrumMesh);
-        personalizedSacrumMesh.vertices = personalizedSacrumMeshVertices.copy();
-        del(personalizedSacrumMeshVertices); gc.collect();
-
-        ## Forming personalized pelvis bone muscle mesh
-        print("\t Forming personalized pelvis bone muscle mesh ...");
-        personalizedPelvisBoneMuscleMesh = sp.cloneMesh(deformedPelvisBoneMuscleMesh);
-        personalizedPelvisBoneMuscleMesh.vertices[leftIliumVertexIndices] = personalizedLeftIliumMesh.vertices;
-        personalizedPelvisBoneMuscleMesh.vertices[rightIliumVertexIndices] = personalizedRightIliumMesh.vertices;
-        personalizedPelvisBoneMuscleMesh.vertices[sacrumVertexIndices] = personalizedSacrumMesh.vertices;
-        personalizedPelvisMesh = sp.cloneMesh(deformedPelvisMesh);
-        personalizedPelvisMesh.vertices = personalizedPelvisBoneMuscleMesh.vertices[pelvisBoneVertexIndices];
-
-        # Deform the pelvis muscle
-        print("Deforming the pelvis muscle ...");
-        deformedPelvisMuscleFeatures = sp.reconstructLandmarksFromBarycentric(deformedPelvisMesh, pelvisMuscleFeatureBaryIndices, pelvisMuscleFeatureBaryCoords);
-        personalizedPelvisMusceFeatures = sp.reconstructLandmarksFromBarycentric(personalizedPelvisMesh, pelvisMuscleFeatureBaryIndices, pelvisMuscleFeatureBaryCoords);
-        deformedToPersonalizedPelvisMuscleFeatureDisplacements = personalizedPelvisMusceFeatures - deformedPelvisMuscleFeatures;
-        rbf = RBFInterpolator(deformedPelvisMuscleFeatures, 
-                              deformedToPersonalizedPelvisMuscleFeatureDisplacements, 
-                              kernel='thin_plate_spline', 
-                              smoothing=1e-3);
-        personalizedPelvisMuscleVertexDisplacements = rbf(deformedPelvisMuscleMesh.vertices);
-        personalizedPelvisMuscleMesh = sp.cloneMesh(deformedPelvisMuscleMesh);
-        personalizedPelvisMuscleMesh.vertices = deformedPelvisMuscleMesh.vertices + personalizedPelvisMuscleVertexDisplacements;
-        del(deformedPelvisMuscleFeatures, personalizedPelvisMusceFeatures, deformedToPersonalizedPelvisMuscleFeatureDisplacements, 
-            rbf, personalizedPelvisMuscleVertexDisplacements); gc.collect();
-
-        # Comptue the personalized pelvis muscle meshes
-        print("Computing the personalized pelvis muscle meshes ...");
-        personalizedPelvisBoneMuscleMesh = sp.cloneMesh(deformedPelvisBoneMuscleMesh);
-        personalizedPelvisBoneMuscleMesh.vertices[pelvisBoneVertexIndices] = personalizedPelvisMesh.vertices;
-        personalizedPelvisBoneMuscleMesh.vertices[pelvisMuscleVertexIndices] = personalizedPelvisMuscleMesh.vertices;
-        
-        # Save the personalized results
-        print("Save the personalized results ...");
-        sp.saveMeshToPLY(debugFolder + f"/{sID}-PersonalizedPelvisBoneMuscleMesh.ply", personalizedPelvisBoneMuscleMesh);
-        del(personalizedPelvisBoneMuscleMesh); gc.collect();
-
-    # Finished 
-    print("Finished.");
-def refineThePelvisJointsForAllData():
-    # Initializing
-    print("Initializing ...");
-    if (len(sys.argv) < 2):
-        print("\t Please input the command as the following: [ProgramName] [StartSubjectIndex] [EndSubjectIndex]"); return;
-    startIndex = int(sys.argv[1]); endIndex = int(sys.argv[2]);
-    disk = "E:";
-    mainFolder = disk + r"\SpinalPelvisPred\Data\PelvisBoneRecon";
-    femalePelvisFolder = mainFolder + r"\FemalePelvisGeometries";
-    personalizedFolder = mainFolder + r"\FemalePelvisGeometries\PersonalizedPelvisStructures";
-    templatePelvisFolder = disk + r"\SpinalPelvisPred\Data\Template\PelvisBonesMuscles";
-    debugFolder = mainFolder + r"\Debugs";
-
-    # Reading subject IDs
-    print("Reading subject IDs ...");
-    subjectIDFilePath = femalePelvisFolder + r"\FemalePelvisIDs.txt";
-    if not os.path.exists(subjectIDFilePath):
-        print("\t Subject ID file does not exist: ", subjectIDFilePath); return;
-    subjectIDs = sp.readListOfStrings(subjectIDFilePath);
-    print("\t Number of subject IDs: ", len(subjectIDs));
-
-    # Reading template data
-    print("Reading template data ...");
-    templatePelvisBoneMuscleMesh = sp.readMesh(templatePelvisFolder + "/TempPelvisBoneMuscles.ply");
-    templateLeftSacroiliacJointMesh = sp.readMesh(templatePelvisFolder + "/TempPelvisBoneMesh_LeftSacroiliacJoint.ply");
-    templateRightSacroiliacJointMesh = sp.readMesh(templatePelvisFolder + "/TempPelvisBoneMesh_RightSacroiliacJoint.ply");
-    templatePubicJointMesh = sp.readMesh(templatePelvisFolder + "/TempPelvisBoneMesh_PubicJoint.ply");
-    templateWithoutJointPelvisBoneMesh = sp.readMesh(templatePelvisFolder + "/TempWithoutJointPelvisBoneMesh.ply");
-    
-    # Compute ROI indices
-    print("Compute ROI indices ...");
-    leftSacroiliacJointVertexIndices = sp.estimateNearestIndicesKDTreeBased(templateLeftSacroiliacJointMesh.vertices, templatePelvisBoneMuscleMesh.vertices);
-    rightSacroiliacJointVertexIndices = sp.estimateNearestIndicesKDTreeBased(templateRightSacroiliacJointMesh.vertices, templatePelvisBoneMuscleMesh.vertices);
-    pubicJointVertexIndices = sp.estimateNearestIndicesKDTreeBased(templatePubicJointMesh.vertices, templatePelvisBoneMuscleMesh.vertices);
-    withoutJointPelvisBoneVertexIndices = sp.estimateNearestIndicesKDTreeBased(templateWithoutJointPelvisBoneMesh.vertices, templatePelvisBoneMuscleMesh.vertices);
-
-    # Processing for each subject
-    print("Processing for each subject ...");
-    for i in range(startIndex, endIndex + 1):       
-        # Debugging
-        sID = subjectIDs[i];
-        print("/****************************************** Processing subject: ", sID);
-
-        # Reading personalized pelvis bone muscle mesh
-        print("\t Reading personalized pelvis bone muscle mesh ...");
-        personalizedPelvisBoneMuscleMeshFilePath = personalizedFolder + f"/{sID}-PersonalizedPelvisBoneMuscleMesh.ply";
-        if not os.path.exists(personalizedPelvisBoneMuscleMeshFilePath):
-            print("\t Personalized pelvis bone muscle mesh file does not exist: ", personalizedPelvisBoneMuscleMeshFilePath);
-            return;
-        personalizedPelvisBoneMuscleMesh = sp.readMesh(personalizedPelvisBoneMuscleMeshFilePath);
-        personalizedWithoutJointPelvisBoneMesh = sp.cloneMesh(templateWithoutJointPelvisBoneMesh);
-        personalizedWithoutJointPelvisBoneMesh.vertices = personalizedPelvisBoneMuscleMesh.vertices[withoutJointPelvisBoneVertexIndices];
-    
-        # Deform using svd transform
-        print("\t Deform using svd transform ...");
-        deformedPelvisBoneMuscleMesh = sp.cloneMesh(templatePelvisBoneMuscleMesh);
-        deformedWithoutJointPelvisBoneMesh = sp.cloneMesh(templateWithoutJointPelvisBoneMesh);
-        deformedLeftScaroiliacJointMesh = sp.cloneMesh(templateLeftSacroiliacJointMesh);
-        deformedRightScaroiliacJointMesh = sp.cloneMesh(templateRightSacroiliacJointMesh);
-        deformedPubicJointMesh = sp.cloneMesh(templatePubicJointMesh);
-        svdTransform = sp.estimateRigidSVDTransform(deformedWithoutJointPelvisBoneMesh.vertices, personalizedWithoutJointPelvisBoneMesh.vertices);
-        deformedPelvisBoneMuscleMesh = sp.transformMesh(deformedPelvisBoneMuscleMesh, svdTransform);
-        deformedWithoutJointPelvisBoneMesh = sp.transformMesh(deformedWithoutJointPelvisBoneMesh, svdTransform);
-        deformedLeftScaroiliacJointMesh = sp.transformMesh(deformedLeftScaroiliacJointMesh, svdTransform);
-        deformedRightScaroiliacJointMesh = sp.transformMesh(deformedRightScaroiliacJointMesh, svdTransform);
-        deformedPubicJointMesh = sp.transformMesh(deformedPubicJointMesh, svdTransform);
-
-        # Deform using affine trasform
-        print("\t Deform using affine transform ...");
-        affineTransform = sp.estimateAffineTransformCPD(deformedWithoutJointPelvisBoneMesh.vertices, personalizedWithoutJointPelvisBoneMesh.vertices);
-        deformedPelvisBoneMuscleMesh = sp.transformMesh(deformedPelvisBoneMuscleMesh, affineTransform);
-        deformedWithoutJointPelvisBoneMesh = sp.transformMesh(deformedWithoutJointPelvisBoneMesh, affineTransform);
-        deformedLeftScaroiliacJointMesh = sp.transformMesh(deformedLeftScaroiliacJointMesh, affineTransform);
-        deformedRightScaroiliacJointMesh = sp.transformMesh(deformedRightScaroiliacJointMesh, affineTransform);
-        deformedPubicJointMesh = sp.transformMesh(deformedPubicJointMesh, affineTransform);
-
-        # Deform using the radial basic function
-        print("\t Deform using the radial basic function ...");
-        deformedToPersonalizedWithoutJointPelvisBoneMeshVertexDisplacements = personalizedWithoutJointPelvisBoneMesh.vertices - deformedWithoutJointPelvisBoneMesh.vertices;
-        rbf = RBFInterpolator(deformedWithoutJointPelvisBoneMesh.vertices, 
-                              deformedToPersonalizedWithoutJointPelvisBoneMeshVertexDisplacements,
-                              kernel='linear', epsilon=10.0, smoothing=5.0, degree=1, neighbors=150);
-        deformedPelvisMuscleVertexDisplacements = rbf(deformedPelvisBoneMuscleMesh.vertices);
-        deformedPelvisBoneMuscleMesh.vertices = deformedPelvisBoneMuscleMesh.vertices + deformedPelvisMuscleVertexDisplacements;
-        deformedWithoutJointPelvisBoneMesh.vertices = deformedPelvisBoneMuscleMesh.vertices[withoutJointPelvisBoneVertexIndices];
-        deformedLeftScaroiliacJointMesh.vertices = deformedPelvisBoneMuscleMesh.vertices[leftSacroiliacJointVertexIndices];
-        deformedRightScaroiliacJointMesh.vertices = deformedPelvisBoneMuscleMesh.vertices[rightSacroiliacJointVertexIndices];
-        deformedPubicJointMesh.vertices = deformedPelvisBoneMuscleMesh.vertices[pubicJointVertexIndices];
-
-        # Forming the personalized pelvis bone muscle mesh
-        print("\t Forming the personalized pelvis bone muscle mesh ...");
-        personalizedPelvisBoneMuscleMesh.vertices[leftSacroiliacJointVertexIndices] = deformedLeftScaroiliacJointMesh.vertices;
-        personalizedPelvisBoneMuscleMesh.vertices[rightSacroiliacJointVertexIndices] = deformedRightScaroiliacJointMesh.vertices;
-        personalizedPelvisBoneMuscleMesh.vertices[pubicJointVertexIndices] = deformedPubicJointMesh.vertices;
-        
-        # Save the personalized pelvis bone muscle mesh
-        print("\t Save the personalized pelvis bone muscle mesh ...");
-        personalizedPelvisBoneMuscleMeshFilePath = debugFolder + f"/{sID}-PersonalizedPelvisBoneMuscleMesh.ply";
-        sp.saveMeshToPLY(personalizedPelvisBoneMuscleMeshFilePath, personalizedPelvisBoneMuscleMesh);
-
-    # Finished processing
-    print("Finished processing.");
-def normalizePersonalizedPelvisBoneMuscleMesh():
-    # Initializing
-    print("Initializing ...");
-    if (len(sys.argv) < 2):
-        print("\t Please input the command as the following: [ProgramName] [StartSubjectIndex] [EndSubjectIndex]"); return;
-    startIndex = int(sys.argv[1]); endIndex = int(sys.argv[2]);
-    disk = "I:";
-    mainFolder = disk + r"\SpinalPelvisPred\Data\PelvisBoneRecon";
-    femalePelvisFolder = mainFolder + r"\FemalePelvisGeometries";
-    personalizedFolder = mainFolder + r"\FemalePelvisGeometries\PersonalizedPelvisStructures";
-    templatePelvisFolder = disk + r"\SpinalPelvisPred\Data\Template\PelvisBonesMuscles";
-    debugFolder = mainFolder + r"\Debugs";
-
-    # Reading subject IDs
-    print("Reading subject IDs ...");
-    subjectIDFilePath = femalePelvisFolder + r"\FemalePelvisIDs.txt";
-    if not os.path.exists(subjectIDFilePath):
-        print("\t Subject ID file does not exist: ", subjectIDFilePath); return;
-    subjectIDs = sp.readListOfStrings(subjectIDFilePath);
-    print("\t Number of subject IDs: ", len(subjectIDs));
-
-    # Normalize first personalized pelvis bone muscle mesh to the origin of the coordinate system
-    print("Normalize first personalized pelvis bone muscle mesh to the origin of the coordinate system ...");
-    firstPersonalizedPelvisBoneMuscleMeshFilePath = personalizedFolder + f"/{subjectIDs[0]}-PersonalizedPelvisBoneMuscleMesh.ply";
-    if not os.path.exists(firstPersonalizedPelvisBoneMuscleMeshFilePath):
-        print("\t First personalized pelvis bone muscle mesh file does not exist: ", firstPersonalizedPelvisBoneMuscleMeshFilePath);
-        return;
-    firstPersonalizedPelvisBoneMuscleMesh = sp.readMesh(firstPersonalizedPelvisBoneMuscleMeshFilePath);
-    firstPersonalizedPelvisBoneMuscleCentroid = sp.computeCentroidPoint(firstPersonalizedPelvisBoneMuscleMesh.vertices);
-    originCoordinateSystem = np.array([0, 0, 0]);
-    svdTransform = sp.estimateTranslationTransformFromPointToPoint(firstPersonalizedPelvisBoneMuscleCentroid, originCoordinateSystem);
-    firstPersonalizedPelvisBoneMuscleMesh = sp.transformMesh(firstPersonalizedPelvisBoneMuscleMesh, svdTransform);
-
-    # Processing for each subject
-    print("Processing for each subject ...");
-    for i in range(startIndex, endIndex + 1):
-        # Debugging
-        sID = subjectIDs[i];
-        print("/****************************************** Processing subject: ", sID);
-    
-        # Estimate rigid transform from mesh i to the first mesh
-        personalizedPelvisBoneMuscleMeshFilePath = personalizedFolder + f"/{sID}-PersonalizedPelvisBoneMuscleMesh.ply";
-        if not os.path.exists(personalizedPelvisBoneMuscleMeshFilePath):
-            print("\t Personalized pelvis bone muscle mesh file does not exist: ", personalizedPelvisBoneMuscleMeshFilePath);
-            return;
-        personalizedPelvisBoneMuscleMesh = sp.readMesh(personalizedPelvisBoneMuscleMeshFilePath);
-        svdTransform = sp.estimateRigidSVDTransform(personalizedPelvisBoneMuscleMesh.vertices, firstPersonalizedPelvisBoneMuscleMesh.vertices);
-        personalizedPelvisBoneMuscleMesh = sp.transformMesh(personalizedPelvisBoneMuscleMesh, svdTransform);
-
-        # Save transformed mesh to out folder
-        personalizedPelvisBoneMuscleMeshFilePath = debugFolder + f"/{sID}-PersonalizedPelvisBoneMuscleMesh.ply";
-        sp.saveMeshToPLY(personalizedPelvisBoneMuscleMeshFilePath, personalizedPelvisBoneMuscleMesh);
-
-    # Finished processing
-    print("Finished processing.");
-def normalizeAllPersonalizedPelvisBoneMuscleMesh():
-    # Initializing
-    print("Initializing ...");
-    if (len(sys.argv) < 2):
-        print("\t Please input the command as the following: [ProgramName] [StartSubjectIndex] [EndSubjectIndex]"); return;
-    startIndex = int(sys.argv[1]); endIndex = int(sys.argv[2]);
-    disk = "I:";
-    mainFolder = disk + r"\SpinalPelvisPred\Data\PelvisBoneRecon";
-    femalePelvisFolder = mainFolder + r"\FemalePelvisGeometries";
-    personalizedFolder = mainFolder + r"\FemalePelvisGeometries\PersonalizedPelvisStructures";
-    templatePelvisFolder = disk + r"\SpinalPelvisPred\Data\Template\PelvisBonesMuscles";
-    debugFolder = mainFolder + r"\Debugs";
-
-    # Reading subject IDs
-    print("Reading subject IDs ...");
-    subjectIDFilePath = femalePelvisFolder + r"\FemalePelvisIDs.txt";
-    if not os.path.exists(subjectIDFilePath):
-        print("\t Subject ID file does not exist: ", subjectIDFilePath); return;
-    subjectIDs = sp.readListOfStrings(subjectIDFilePath);
-    print("\t Number of subject IDs: ", len(subjectIDs));
-
-    # Normalize first personalized pelvis bone muscle mesh to the origin of the coordinate system
-    print("Normalize first personalized pelvis bone muscle mesh to the origin of the coordinate system ...");
-    firstPersonalizedPelvisBoneMuscleMeshFilePath = personalizedFolder + f"/{subjectIDs[0]}-PersonalizedPelvisBoneMuscleMesh.ply";
-    if not os.path.exists(firstPersonalizedPelvisBoneMuscleMeshFilePath):
-        print("\t First personalized pelvis bone muscle mesh file does not exist: ", firstPersonalizedPelvisBoneMuscleMeshFilePath);
-        return;
-    firstPersonalizedPelvisBoneMuscleMesh = sp.readMesh(firstPersonalizedPelvisBoneMuscleMeshFilePath);
-    firstPersonalizedPelvisBoneMuscleCentroid = sp.computeCentroidPoint(firstPersonalizedPelvisBoneMuscleMesh.vertices);
-    originCoordinateSystem = np.array([0, 0, 0]);
-    svdTransform = sp.estimateTranslationTransformFromPointToPoint(firstPersonalizedPelvisBoneMuscleCentroid, originCoordinateSystem);
-    firstPersonalizedPelvisBoneMuscleMesh = sp.transformMesh(firstPersonalizedPelvisBoneMuscleMesh, svdTransform);
-
-    # Processing for each subject
-    print("Processing for each subject ...");
-    for i in range(startIndex, endIndex + 1):
-        # Debugging
-        sID = subjectIDs[i];
-        print("/****************************************** Processing subject: ", sID);
-    
-        # Estimate rigid transform from mesh i to the first mesh
-        personalizedPelvisBoneMuscleMeshFilePath = personalizedFolder + f"/{sID}-PersonalizedPelvisBoneMuscleMesh.ply";
-        if not os.path.exists(personalizedPelvisBoneMuscleMeshFilePath):
-            print("\t Personalized pelvis bone muscle mesh file does not exist: ", personalizedPelvisBoneMuscleMeshFilePath);
-            return;
-        personalizedPelvisBoneMuscleMesh = sp.readMesh(personalizedPelvisBoneMuscleMeshFilePath);
-        svdTransform = sp.estimateRigidSVDTransform(personalizedPelvisBoneMuscleMesh.vertices, firstPersonalizedPelvisBoneMuscleMesh.vertices);
-        personalizedPelvisBoneMuscleMesh = sp.transformMesh(personalizedPelvisBoneMuscleMesh, svdTransform);
-
-        # Save transformed mesh to out folder
-        personalizedPelvisBoneMuscleMeshFilePath = debugFolder + f"/{sID}-PersonalizedPelvisBoneMuscleMesh.ply";
-        sp.saveMeshToPLY(personalizedPelvisBoneMuscleMeshFilePath, personalizedPelvisBoneMuscleMesh);
-
-    # Finished processing
-    print("Finished processing.");
-def prepareTrainingTestingIDs():
-    # Initializing
-    print("Initializing ...");
-    def splitData(data, trainRatio=0.7, valRatio=0.2, testRatio=0.1, seed=42):
-        random.seed(seed)
-        random.shuffle(data)
-
-        trainEnd = int(trainRatio * len(data))
-        valEnd = trainEnd + int(valRatio * len(data))
-
-        trainSet = data[:trainEnd]
-        valSet = data[trainEnd:valEnd]
-        testSet = data[valEnd:]
-
-        return trainSet, valSet, testSet
-    disk = "I:";
-    subjectIDFilePath = disk + r"\SpinalPelvisPred\Data\PelvisBoneRecon\FemalePelvisGeometries\FemalePelvisIDs.txt";
-    debugFolder = disk + r"\SpinalPelvisPred\Data\PelvisBoneRecon\Debugs";
-
-    # Reading subject IDs
-    print("Reading subject IDs ...");
-    subjectIDs = sp.readListOfStrings(subjectIDFilePath);
-
-    # Train test split
-    print("Train test splits ...");
-    numOfValids = 10;
-    for i in range(numOfValids):
-        # Debugging
-        print("\t Processing the valid: ", i);
-
-        # Generate the training testing validating
-        trainingIDs, validIDs, testingIDs = splitData(subjectIDs, 0.7, 0.2, 0.1, seed=i);
-
-        # Save the training testing and validating
-        sp.saveListOfStrings(debugFolder + f"/TrainingIDs_{i}.txt", trainingIDs);
-        sp.saveListOfStrings(debugFolder + f"/ValidationIDs_{i}.txt", validIDs);
-        sp.saveListOfStrings(debugFolder + f"/TestingIDs_{i}.txt", testingIDs);
-    
-    # Finished processing
-    print("Finished processing.");
-def manageDataForSystemDatabase():
-    # Initializing
-    print("Initializing ...");
-    disk = "G:";
-    debugFolder = disk + r"\Data\PelvisBoneRecon\Debugs";
-    systemDatabaseFolder = disk + "/Data/PelvisBoneRecon/SystemDataBase/" 
-    templateFolder = disk + r"\Data\Template\PelvisBonesMuscles";
-    systemDatabaseFilePath = systemDatabaseFolder + "/SystemDatabase.h5";
-    pelvisBoneMuscleTemplateDataFieldName = "PelvisBoneMuscleTemplateData";
-
-    # Initialize databse
-    print("Initialize database ...");
-    database = SystemDatabaseManager(systemDatabaseFilePath);
-
-    # Adding template data to the system database
-    print("Adding template data to the system database ...");
-    def addingTemplatePelvicBoneMuscleDataToTheSystemDatabase():
-        print("Preparing data for writing ...");
-        leftIliumFeatureIndices = sp.readIndicesFromCSVFile(templateFolder + "/LeftIliumFeatureIndices.csv");
-        leftIliumVertexIndices = sp.readIndicesFromCSVFile(templateFolder + "/LeftIliumVertexIndices.csv");
-        leftSacroiliacJointVertexIndices = sp.readIndicesFromCSVFile(templateFolder + "/LeftSacroiliacJointVertexIndices.csv");
-        pubicJointVertexIndices = sp.readIndicesFromCSVFile(templateFolder + "/PubicJointVertexIndices.csv");
-        rightIliumFeatureIndices = sp.readIndicesFromCSVFile(templateFolder + "/RightIliumFeatureIndices.csv");
-        rightIliumVertexIndices = sp.readIndicesFromCSVFile(templateFolder + "/RightIliumVertexIndices.csv");
-        rightSacroiliacJointVertexIndices = sp.readIndicesFromCSVFile(templateFolder + "/RightSacroiliacJointVertexIndices.csv");
-        sacrumFeatureIndices = sp.readIndicesFromCSVFile(templateFolder + "/SacrumFeatureIndices.csv");
-        sacrumVertexIndices = sp.readIndicesFromCSVFile(templateFolder + "/SacrumVertexIndices.csv");
-        templatePelvisCoarseShape = sp.readMesh(templateFolder + "/TemplatePelvisCoarseShape.ply");
-        tempPelvisBoneMesh = sp.readMesh(templateFolder + "/TempPelvisBoneMesh.ply");
-        tempPelvisBoneMuscleMesh = sp.readMesh(templateFolder + "/TempPelvisBoneMuscles.ply");
-        tempPelvisMuscleMesh = sp.readMesh(templateFolder + "/TempPelvisMuscles.ply");
-        tempPelvisBoneMeshIliumJoint = sp.readMesh(templateFolder + "/TempPelvisBoneMesh_IliumJoint.ply");
-        tempPelvisBoneMeshLeftIlium = sp.readMesh(templateFolder + "/TempPelvisBoneMesh_LeftIlium.ply");
-        tempPelvisBoneMeshLeftSacroiliacJoint = sp.readMesh(templateFolder + "/TempPelvisBoneMesh_LeftSacroiliacJoint.ply");
-        tempPelvisBoneMeshLeftSacroiliacJointPickedPoints = sp.read3DPointsFromPPFile(templateFolder + "/TempPelvisBoneMesh_LeftSacroiliacJoint_picked_points.pp");
-        tempPelvisBoneMeshPickedPoints = sp.read3DPointsFromPPFile(templateFolder + "/TempPelvisBoneMesh_picked_points.pp");
-        tempPelvisBoneMeshLeftIliumPickedPoints = sp.read3DPointsFromOFFFile(templateFolder + "/TempPelvisBoneMesh_picked_points_leftIlium.off");
-        tempPelvisBoneMeshRightIliumPickedPoints = sp.read3DPointsFromOFFFile(templateFolder + "/TempPelvisBoneMesh_picked_points_rightIlium.off");
-        tempPelvisBoneMeshSacrumPickedPoints = sp.read3DPointsFromOFFFile(templateFolder + "/TempPelvisBoneMesh_picked_points_sacrum.off");
-        tempPelvisBoneMeshPubicJoint = sp.readMesh(templateFolder + "/TempPelvisBoneMesh_PubicJoint.ply");
-        tempPelvisBoneMeshPubicJointPickedPoints = sp.read3DPointsFromPPFile(templateFolder + "/TempPelvisBoneMesh_PubicJoint_picked_points.pp");
-        tempPelvisBoneMeshRightIlium = sp.readMesh(templateFolder + "/TempPelvisBoneMesh_RightIlium.ply");
-        tempPelvisBoneMeshRightSacroiliacJoint = sp.readMesh(templateFolder + "/TempPelvisBoneMesh_RightSacroiliacJoint.ply");
-        tempPelvisBoneMeshRightSacroiliacJointPickedPoints = sp.read3DPointsFromPPFile(templateFolder + "/TempPelvisBoneMesh_RightSacroiliacJoint_picked_points.pp");
-        tempPelvisBoneMeshSacrum = sp.readMesh(templateFolder + "/TempPelvisBoneMesh_Sacrum.ply");
-        tempPelvisBoneMeshWithOutJoints = sp.readMesh(templateFolder + "/TempPelvisBoneMeshWithOutJoints.ply");
-        tempPelvisBoneShape = sp.readMesh(templateFolder + "/TempPelvisBoneShape.ply");
-        tempPelvisMusclesPickedPoints = sp.read3DPointsFromPPFile(templateFolder + "/TempPelvisMuscles_picked_points.pp");
-        
-        # Remove the pelvis bone muscle template data field
-        print("Removing the template field ...");
-        database.removeField(pelvisBoneMuscleTemplateDataFieldName);
-
-        # Adding new data
-        print("Adding new data ...");
-        database.addField("PelvisBoneMuscleTemplateData");
-        database.addVectorXiItem("PelvisBoneMuscleTemplateData", "LeftIliumFeatureIndices", leftIliumFeatureIndices);
-        database.addVectorXiItem("PelvisBoneMuscleTemplateData", "LeftIliumVertexIndices", leftIliumVertexIndices);
-        database.addVectorXiItem("PelvisBoneMuscleTemplateData", "LeftSacroiliacJointVertexIndices", leftSacroiliacJointVertexIndices);
-        database.addVectorXiItem("PelvisBoneMuscleTemplateData", "PubicJointVertexIndices", pubicJointVertexIndices);
-        database.addVectorXiItem("PelvisBoneMuscleTemplateData", "RightIliumFeatureIndices", rightIliumFeatureIndices);
-        database.addVectorXiItem("PelvisBoneMuscleTemplateData", "RightIliumVertexIndices", rightIliumVertexIndices);
-        database.addVectorXiItem("PelvisBoneMuscleTemplateData", "RightSacroiliacJointVertexIndices", rightSacroiliacJointVertexIndices);
-        database.addVectorXiItem("PelvisBoneMuscleTemplateData", "SacrumFeatureIndices", sacrumFeatureIndices);
-        database.addVectorXiItem("PelvisBoneMuscleTemplateData", "SacrumVertexIndices", sacrumVertexIndices);
-        database.addMeshItem("PelvisBoneMuscleTemplateData", "TemplatePelvisCoarseShape", templatePelvisCoarseShape);
-        database.addMeshItem("PelvisBoneMuscleTemplateData", "TempPelvisBoneMesh", tempPelvisBoneMesh);
-        database.addMeshItem("PelvisBoneMuscleTemplateData", "TempPelvisBoneMuscleMesh", tempPelvisBoneMuscleMesh);
-        database.addMeshItem("PelvisBoneMuscleTemplateData", "TempPelvisMuscleMesh", tempPelvisMuscleMesh);
-        database.addMeshItem("PelvisBoneMuscleTemplateData", "TempPelvisBoneMeshIliumJoint", tempPelvisBoneMeshIliumJoint);
-        database.addMeshItem("PelvisBoneMuscleTemplateData", "TempPelvisBoneMeshLeftIlium", tempPelvisBoneMeshLeftIlium);
-        database.addMeshItem("PelvisBoneMuscleTemplateData", "TempPelvisBoneMeshLeftSacroiliacJoint", tempPelvisBoneMeshLeftSacroiliacJoint);
-        database.addMatrixXdItem("PelvisBoneMuscleTemplateData", "TempPelvisBoneMeshLeftSacroiliacJointPickedPoints", tempPelvisBoneMeshLeftSacroiliacJointPickedPoints);
-        database.addMatrixXdItem("PelvisBoneMuscleTemplateData", "TempPelvisBoneMeshPickedPoints", tempPelvisBoneMeshPickedPoints);
-        database.addMatrixXdItem("PelvisBoneMuscleTemplateData", "TempPelvisBoneMeshLeftIliumPickedPoints", tempPelvisBoneMeshLeftIliumPickedPoints);
-        database.addMatrixXdItem("PelvisBoneMuscleTemplateData", "TempPelvisBoneMeshRightIliumPickedPoints", tempPelvisBoneMeshRightIliumPickedPoints);
-        database.addMatrixXdItem("PelvisBoneMuscleTemplateData", "TempPelvisBoneMeshSacrumPickedPoints", tempPelvisBoneMeshSacrumPickedPoints);
-        database.addMeshItem("PelvisBoneMuscleTemplateData", "TempPelvisBoneMeshPubicJoint", tempPelvisBoneMeshPubicJoint);
-        database.addMatrixXdItem("PelvisBoneMuscleTemplateData", "TempPelvisBoneMeshPubicJointPickedPoints", tempPelvisBoneMeshPubicJointPickedPoints);
-        database.addMeshItem("PelvisBoneMuscleTemplateData", "TempPelvisBoneMeshRightIlium", tempPelvisBoneMeshRightIlium);
-        database.addMeshItem("PelvisBoneMuscleTemplateData", "TempPelvisBoneMeshRightSacroiliacJoint", tempPelvisBoneMeshRightSacroiliacJoint);
-        database.addMatrixXdItem("PelvisBoneMuscleTemplateData", "TempPelvisBoneMeshRightSacroiliacJointPickedPoints", tempPelvisBoneMeshRightSacroiliacJointPickedPoints);
-        database.addMeshItem("PelvisBoneMuscleTemplateData", "TempPelvisBoneMeshSacrum", tempPelvisBoneMeshSacrum);
-        database.addMeshItem("PelvisBoneMuscleTemplateData", "TempPelvisBoneMeshWithOutJoints", tempPelvisBoneMeshWithOutJoints);
-        database.addMeshItem("PelvisBoneMuscleTemplateData", "TempPelvisBoneShape", tempPelvisBoneShape);
-        database.addMatrixXdItem("PelvisBoneMuscleTemplateData", "TempPelvisMusclesPickedPoints", tempPelvisMusclesPickedPoints);
-
-        # Compacting the system file
-        print("Compacting system file ...");
-        database.compactSystemFile();
-    addingTemplatePelvicBoneMuscleDataToTheSystemDatabase();
-
-    # Finished processing
-    print("Finished processing.");
-def computePersonalizationQuality():
-    # Initializing
-    print("Initializing ...");
-    disk = "I:";
-    mainFolder = disk + r"\SpinalPelvisPred\Data\PelvisBoneRecon";
-    pelvicFolder = mainFolder + r"\FemalePelvisGeometries";
-    personalizedPelvicFolder = mainFolder + r"\FemalePelvisGeometries\PersonalizedPelvisStructures";
-    ctPelvicFolder = mainFolder + r"\FemalePelvisGeometries\AllPelvicStructures";
-    templateFolder = disk + r"\SpinalPelvisPred\Data\Template\PelvisBonesMuscles";
-    subjectIDFilePath = pelvicFolder + r"\FemalePelvisIDs.txt";
-
-    # Reading initial information
-    print("Reading initial information ...");
-    pelvisIDs = sp.readListOfStrings(subjectIDFilePath);
-    numOfSubjects = len(pelvisIDs);
-
-    # Reading template information
-    print("Reading template information ...");
-    templatePelvicBoneMuscle = sp.readMesh(templateFolder + r"\TempPelvisBoneMuscles.ply");
-    templatePelvicBone = sp.readMesh(templateFolder + r"\TempPelvisBoneMesh.ply");
-    tempWithoutJointPelvicBone = sp.readMesh(templateFolder + r"\TempWithoutJointPelvisBoneMesh.ply");
-    pelvicBoneVertexIndices = sp.estimateNearestIndicesKDTreeBased(tempWithoutJointPelvicBone.vertices, templatePelvicBoneMuscle.vertices);
-
-    # Compute vertex to surface distances for all the subjects
-    print("Computing vertex to surface distances ...");
-    vertexDistances = [];
-    for i in range(numOfSubjects):
-        # Debugging
-        print("Processing subject: ", i, " with ID: ", pelvisIDs[i]);
-        subjectID = pelvisIDs[i];
-
-        # Reading personalize pelvic bone mesh and the CT pelvic bone mesh
-        personalizedPelvicBoneMuscle = sp.readMesh(personalizedPelvicFolder + f"/{subjectID}-PersonalizedPelvisBoneMuscleMesh.ply");
-        personalizedPelvicBone = tempWithoutJointPelvicBone;
-        personalizedPelvicBone.vertices = personalizedPelvicBoneMuscle.vertices[pelvicBoneVertexIndices];
-        ctPelvicBone = sp.readMesh(ctPelvicFolder + f"/{subjectID}-PelvisBoneMesh.ply");
-
-        # Compute the vertex to surface distances
-        nearestCTVertices = sp.estimateNearestPointsFromPoints(personalizedPelvicBone.vertices, ctPelvicBone.vertices);
-        distances = sp.computeCorrespondingDistancesPoints2Points(personalizedPelvicBone.vertices, nearestCTVertices);
-
-        # Append the distances to data
-        vertexDistances.append(distances);
-    vertexDistances = np.array(vertexDistances);
-
-    # Save the computed distances to file
-    print("Saving computed distances to file ...");
-    sp.saveNumPyArrayToNPY(pelvicFolder + f"/{subjectID}-VertexDistances.npy", vertexDistances);
-
-    # Finished processing
-    print("Finished processing.");
-def drawPersonalizedErrorsOnTemplatePelvicBoneMesh():
-    # Initialize
-    print("Initializing ...");
-    disk = "I:";
-    mainFolder = disk + r"\SpinalPelvisPred\Data\PelvisBoneRecon";
-    pelvicFolder = mainFolder + r"\FemalePelvisGeometries";
-    personalizedPelvicFolder = mainFolder + r"\FemalePelvisGeometries\PersonalizedPelvisStructures";
-    ctPelvicFolder = mainFolder + r"\FemalePelvisGeometries\AllPelvicStructures";
-    templateFolder = disk + r"\SpinalPelvisPred\Data\Template\PelvisBonesMuscles";
-
-    # Load the template pelvic bone mesh
-    print("Loading template pelvic bone mesh ...");
-    templatePelvicBone = sp.readMesh(templateFolder + r"\TempWithoutJointPelvisBoneMesh.ply");
-
-    # Loading vertex to surface distances 
-    print("Loading vertex to surface distances ...");
-    vertexDistances = sp.loadNumPYArrayFromNPY(pelvicFolder + f"/PersonalizedErrors.npy");
-
-    # Draw the distance color maps on the template pelvic bone mesh
-    print("Drawing distance color maps on the template pelvic bone mesh ...");
-    ## Compute data for drawing
-    meanTestingError = np.mean(vertexDistances, axis=0);
-    ## Normalize the mean testing error to [0, 1] range
-    normalizedMeanTestingError = (meanTestingError - np.min(meanTestingError)) / (np.max(meanTestingError) - np.min(meanTestingError));
-    ## Create a custom colormap from red (low) to violet (high)
-    from matplotlib.colors import LinearSegmentedColormap
-    colors_list = ['red', 'orange', 'yellow', 'green', 'blue', 'violet']
-    colormap = LinearSegmentedColormap.from_list('red_to_violet', colors_list)
-    ## Map the normalized mean testing error to colors
-    colors = colormap(normalizedMeanTestingError);
-    ## Set the colors to the vertices of the template pelvis bone mesh using trimesh and visualize it
-    templatePelvicBone.visual.vertex_colors = colors[:, :3] * 255;  # Convert to 0-255 range
-    trimeshViewer = trimesh.Scene(templatePelvicBone);
-    trimeshViewer.show();
-
-    # Generate and display color ruler
-    print("Generating color ruler ...");
-    ## Create a figure for the color ruler
-    fig, ax = plt.subplots(figsize=(8, 2))    
-    ## Create a gradient for the colorbar
-    gradient = np.linspace(0, 1, 256).reshape(1, -1)    
-    ## Display the gradient
-    im = ax.imshow(gradient, aspect='auto', cmap=colormap, extent=[0, 1, 0, 1])    
-    ## Calculate the actual error values for min, middle, and max
-    min_error = np.min(meanTestingError) * 1000;  # Convert to mm
-    max_error = np.max(meanTestingError) * 1000;  # Convert to mm
-    mid_error = (min_error + max_error) / 2;
-    ## Set up the colorbar ticks and labels
-    ax.set_xlim(0, 1)
-    ax.set_ylim(0, 1)
-    ax.set_xticks([0, 0.5, 1])
-    ax.set_xticklabels([f'{min_error:.2f} mm\n(Min)', f'{mid_error:.2f} mm\n(Middle)', f'{max_error:.2f} mm\n(Max)'])
-    ax.set_yticks([])
-    ax.set_xlabel('Prediction Error', fontsize=12, fontweight='bold')
-    ax.set_title('Vertex-based Error Distribution between Personalized and CT-based Pelvic Bone Meshes\n(Mean ± Std = {:.2f} ± {:.2f} mm)'.format(np.mean(meanTestingError) * 1000, np.std(meanTestingError) * 1000), fontsize=14, fontweight='bold')    
-    ## Add grid lines for better readability
-    ax.axvline(x=0.5, color='black', linestyle='--', alpha=0.5, linewidth=1)    
-    ## Adjust layout and display
-    plt.tight_layout()
-    ## Save the color ruler figure
-    plt.savefig(pelvicFolder + "/ColorMapLegend_PelvisPredictionErrors.png", bbox_inches='tight', dpi=300)
-    ## Show the color ruler
-    plt.show()
-
-    # Finished processing
-    print("Finished processing.");
-def trainThePCAModelForPersonalizedBoneMuscleMeshes():
-    # Information
-    # This procedure train the PCA model of the pelvic bone muscle shape model and analyze the trained model.
-
-    # Initialization
-    print("Initializing ...");
-    disk = "I:";
-    mainFolder = disk + r"\SpinalPelvisPred\Data\PelvisBoneRecon";
-    pelvicFolder = mainFolder + r"\FemalePelvisGeometries";
-    personalizedPelvicFolder = mainFolder + r"\FemalePelvisGeometries\PersonalizedPelvisStructures";
-    ctPelvicFolder = mainFolder + r"\FemalePelvisGeometries\AllPelvicStructures";
-    templateFolder = disk + r"\SpinalPelvisPred\Data\Template\PelvisBonesMuscles";
-
-    # Reading initial information
-    print("Reading initial information ...");
-    subjectIDFilePath = pelvicFolder + r"\FemalePelvisIDs.txt";
-    pelvisIDs = sp.readListOfStrings(subjectIDFilePath);
-    numOfSubjects = len(pelvisIDs);
-
-    # Build the PCA statistical shape model of the pelvic bone muscle mesh
-    print("Build the PCA statistical shape model ...");
-    ## Forming the training data
-    print("\t Forming the training data ...");
-    trainingData = [];
-    for i in range(numOfSubjects):
-        # Debugging
-        print(i, " ", end="", flush=True);
-
-        # Load the personalized pelvic structure
-        pelvicBoneMuscleMesh = sp.readMesh(personalizedPelvicFolder + f"/{pelvisIDs[i]}-PersonalizedPelvisBoneMuscleMesh.ply");
-
-        # Forming the training data
-        data = pelvicBoneMuscleMesh.vertices.flatten();
-        trainingData.append(data);
-    print("");
-    ## Normalize the training data using available normalization technique
-    print("\t Normalizing the training data ...");
-    dataScaler = StandardScaler().fit(trainingData);
-    scaledTrainingData = dataScaler.transform(trainingData);
-    ## Train the PCA model
-    print("\t Train the PCA model with 200 number of components ...");
-    pca = PCA(n_components=200);
-    pca.fit(scaledTrainingData);
-    ## Transform the data to get all parameters
-    print("\t Transform the data to get all parameters ...");
-    transformedData = pca.transform(scaledTrainingData);
-    ## Save all parameters to file
-    print("\t Save all parameters to file ...");
-    sp.saveNumPyArrayToNPY(pelvicFolder + "/PCA_TransformedData.npy", transformedData);
-    ## Save the trained model to file
-    print("\t Save the trained model to file ...");
-    with open(pelvicFolder + "/PCA_Model.pkl", "wb") as f:
-        pickle.dump(pca, f);
-    ## Save the scaler to file
-    print("\t Save the scaler to file ...");
-    with open(pelvicFolder + "/DataScaler.pkl", "wb") as f:
-        pickle.dump(dataScaler, f);
-
-    # Finished processing
-    print("Finished processing.");
-def drawTheQualityOfTheTrainedPCAModel():
-    # Initialize
-    print("Initialize ...");
-    def loadPCAModelFromPKL(file_path):
-        """
-        Load a PCA model from a pickle file.
-        
-        Parameters:
-        - file_path (str): Path to the .pkl file containing the PCA model
-        
-        Returns:
-        - PCA model object
-        """
-        try:
-            with open(file_path, 'rb') as f:
-                pcaModel = pickle.load(f)
-            return pcaModel
-        except FileNotFoundError:
-            print(f"File not found: {file_path}")
-            return None
-        except Exception as e:
-            print(f"Error loading PCA model: {e}")
-            return None
-    def loadDataScaler(filePath):
-        """
-        Load a data scaler from a pickle file.
-
-        Parameters:
-        - filePath (str): Path to the .pkl file containing the data scaler
-
-        Returns:
-        - Data scaler object
-        """
-        try:
-            with open(filePath, 'rb') as f:
-                dataScaler = pickle.load(f)
-            return dataScaler
-        except FileNotFoundError:
-            print(f"File not found: {filePath}")
-            return None
-        except Exception as e:
-            print(f"Error loading data scaler: {e}")
-            return None
-    disk = "I:";
-    mainFolder = disk + r"\SpinalPelvisPred\Data\PelvisBoneRecon";
-    pelvicFolder = mainFolder + r"\FemalePelvisGeometries";
-    shapeAnalyzingFolder = pelvicFolder + r"\ShapeVariationAnalyses";
-    templateFolder = disk + r"\SpinalPelvisPred\Data\Template\PelvisBonesMuscles";
-
-    # Load the PCA model
-    print("Loading the PCA model ...");
-    pcaModel = loadPCAModelFromPKL(pelvicFolder + "/PCA_Model.pkl");
-
-    # Load the data scaler
-    print("Load the data scaler ...");
-    dataScaler = loadDataScaler(pelvicFolder + "/DataScaler.pkl");
-
-    # Reading the transformed components
-    print("Reading the transformed components ...");
-    componentData = sp.loadNumPYArrayFromNPY(pelvicFolder + "/PCA_TransformedData.npy");
-
-    # Reading the template pelvic bone muscle mesh
-    print("Reading the template pelvic bone muscle mesh ...");
-    templateMesh = sp.readMesh(templateFolder + "/TempPelvisBoneMuscles.ply");
-
-    # Draw the explained variance plot
-    print("Drawing the explained variance plot ...");
-    explained_variance_ratio = pcaModel.explained_variance_ratio_;
-    # plt.figure(figsize=(12, 8));
-    # plt.plot(range(1, len(explained_variance_ratio) + 1), explained_variance_ratio, 'b-o', markersize=4);
-    # plt.xlabel('Principal Component', fontweight='bold', fontsize=12);
-    # plt.ylabel('Explained Variance Ratio', fontweight='bold', fontsize=12);
-    # plt.title('Explained Variance Ratio per Component', fontweight='bold', fontsize=14);
-    # plt.grid(True, alpha=0.3);
-    # plt.xticks(fontweight='bold');
-    # plt.yticks(fontweight='bold');
-    # plt.show();
-
-    # Draw the Cumulative variance plot
-    print("Drawing the cumulative variance plot ...");
-    cumulative_variance = np.cumsum(explained_variance_ratio);
-    plt.figure(figsize=(12, 8));
-    plt.plot(range(1, len(cumulative_variance) + 1), cumulative_variance, 'b-o', markersize=4);
-    plt.xlabel('Principal Component', fontweight='bold', fontsize=12);
-    plt.ylabel('Cumulative Explained Variance', fontweight='bold', fontsize=12);
-    plt.title('Cumulative Explained Variance per Component', fontweight='bold', fontsize=14);
-    plt.grid(True, alpha=0.3);
-    plt.xticks(fontweight='bold');
-    plt.yticks(fontweight='bold');
-    plt.show();
-
-    # Drawing the shape variation visualization
-    print("Drawing the shape variation visualization ...");
-    # ## Get original number of components
-    # originalNumComponents = pcaModel.n_components_;
-    # ## Defining some functions for processing
-    # def reducePCAComponents(pcaModel, newNumComponents):
-    #     """
-    #     Reduce the number of components in an existing PCA model.
-        
-    #     Parameters:
-    #     - pcaModel: existing PCA model
-    #     - newNumComponents: desired number of components
-        
-    #     Returns:
-    #     - reduced PCA model
-    #     """
-    #     if newNumComponents > pcaModel.n_components_:
-    #         print(f"Warning: Requested {newNumComponents} components, but model only has {pcaModel.n_components_}")
-    #         return pcaModel
-        
-    #     # Create new PCA model with reduced components
-    #     reducedPCA = PCA(n_components=newNumComponents)
-        
-    #     # Copy the relevant attributes from the original model
-    #     reducedPCA.components_ = pcaModel.components_[:newNumComponents]
-    #     reducedPCA.explained_variance_ = pcaModel.explained_variance_[:newNumComponents]
-    #     reducedPCA.explained_variance_ratio_ = pcaModel.explained_variance_ratio_[:newNumComponents]
-    #     reducedPCA.singular_values_ = pcaModel.singular_values_[:newNumComponents]
-    #     reducedPCA.mean_ = pcaModel.mean_
-    #     reducedPCA.n_components_ = newNumComponents
-    #     reducedPCA.n_features_ = pcaModel.n_features_
-    #     reducedPCA.n_samples_ = pcaModel.n_samples_
-        
-    #     return reducedPCA
-    # def getOutputMeshFromPCA(pcaModel, dataScaler, componentValues, templateMesh):
-    #     # Reduce the number of components based on the len of component values
-    #     numComps = min(len(componentValues), pcaModel.n_components_);
-    #     reducedPCA = reducePCAComponents(pcaModel, numComps);
-
-    #     # Inverse the pca to form the mesh vertices
-    #     scaledFlattenVertices = reducedPCA.inverse_transform(componentValues);
-    #     scaledFlattenVertices = scaledFlattenVertices.reshape(1, -1);
-
-    #     # Unscale the data
-    #     flattenVertices = dataScaler.inverse_transform(scaledFlattenVertices);
-    #     vertices = flattenVertices.reshape(-1, 3);
-
-    #     # Forming the mesh
-    #     outMesh = sp.cloneMesh(templateMesh);
-    #     outMesh.vertices = vertices;
-
-    #     # Return the mesh
-    #     return outMesh;
-    # ## Compute the mean shape
-    # meanComponentValues = np.zeros(originalNumComponents);
-    # meanMesh = getOutputMeshFromPCA(pcaModel, dataScaler, meanComponentValues, templateMesh);
-    # ## Generate the mesh again with component data and render in the same trimesh scene
-    # componentMeshes = [];
-    # numOfMeshes = 10;
-    # for i in range(numOfMeshes):
-    #     # Get component values
-    #     componentValues = componentData[i, :];
-    #     # Get output of the mesh
-    #     componentMesh = getOutputMeshFromPCA(pcaModel, dataScaler, componentValues, templateMesh);
-    #     # Set the color of the mesh as rainbow color
-    #     rgbColor = sp.generateRainBowColor(i, numOfMeshes);
-    #     rgbColor = np.array(rgbColor)*255.0;
-    #     # Set the grb color with alpha value
-    #     componentMesh.visual.vertex_colors = np.array([rgbColor[0], rgbColor[1], rgbColor[2], 200], dtype=np.uint8);
-    #     componentMeshes.append(componentMesh);
-    # trimeshScene = trimesh.Scene([meanMesh] + componentMeshes);
-    # trimeshScene.show();
-
-    # Finished processing
-    print("Finished processing.");
-def featureToPelvisStructureRecon_generateAugmentedAndTestIDs():
-    # Initializing
-    print("Initializing ...");
-    disk = "H:";
-    if (len(sys.argv) < 2):
-        print("Please input the command as: [ProgramName] [ValidFold]"); return;
-    validFold = int(sys.argv[1]);
-    pelvisBoneReconFolder = disk + "/Data/PelvisBoneRecon";
-    crossValidationFolder = pelvisBoneReconFolder + "/CrossValidation";
-    crossValidAugFolder = crossValidationFolder + f"/AugmentedTestingIDs/Fold_{validFold}"
-    femalePelvisIDFilePath = pelvisBoneReconFolder + "/FemalePelvisIDs.txt"
-
-    # Reading initial information
-    print("Reading initial information ...");
-    pelvisIDs = sp.readListOfStrings(femalePelvisIDFilePath);
-
-    # Generate augmented IDs and testing IDs
-    print("Generating augmented ids and testing ids ...");
-    random.seed(42 + validFold);
-    random.shuffle(pelvisIDs);
-    splitRatio = 0.9
-    splitIndex = int(len(pelvisIDs) * splitRatio);
-    augmentedIds = pelvisIDs[:splitIndex];
-    testingIds = pelvisIDs[splitIndex:];
-
-    # Saving the augmented IDs and testing IDs
-    print("Saving augmented IDs and testing IDs ...");
-    sp.saveListOfStrings(crossValidAugFolder + "/AugmentedIDs.txt", augmentedIds);
-    sp.saveListOfStrings(crossValidAugFolder + "/TestingIDs.txt", testingIds);
-
-    # Generate ten times of training and validating data
-    print("Generating ten times of training and validating data ...");
-    numOfValids = 10; trainRatio = 0.8;
-    for i in range(numOfValids):
-        random.seed(i)  # Ensure reproducibility per run
-        shuffledData = augmentedIds.copy();
-        random.shuffle(shuffledData);
-
-        splitIndex = int(len(shuffledData) * trainRatio);
-        trainData = shuffledData[:splitIndex];
-        validData = shuffledData[splitIndex:];
-
-        sp.makeDirectory(crossValidAugFolder + "/TrainingValidIDs");
-
-        sp.saveListOfStrings(crossValidAugFolder + f"/TrainingValidIDs/TrainingIDs_{i}.txt", trainData);
-        sp.saveListOfStrings(crossValidAugFolder + f"/TrainingValidIDs/ValidIDs_{i}.txt", validData);
-
-    # Finished processing
-    print("Finished processing.");
-def featureToPelvisStructureRecon_augmentPelvisShapes_PCAGaussianMixture():
-    # Information: 
-    #  This procedure will generate the synthetic data on the training data and validating data for generatring the statistical shape model of the pelvis bone mesh
-    #  the ssm of the pelvis bone mesh will be used for generating new data. The data will be trained and optimized on the augmented data. The optimized model will be
-    #  tested on the tested data to see the efficiency of the data aumgnetaion.
-    # Initializing
-    print("Initializing ...");
-    if (len(sys.argv) < 2):
-        print("Please input the command as: [ProgramName] [ValidFold]"); return;
-    validFold = int(sys.argv[1]);
-    disk = "F:";
-    pelvisBoneReconFolder = disk + "/Data/PelvisBoneRecon";
-    crossValidAugmentedFolder = pelvisBoneReconFolder + f"/CrossValidation/AugmentedTestingIDs/Fold_{validFold}";
-    augmentingPelvisIDFilePath = crossValidAugmentedFolder + "/AugmentedIDs.txt"
-    systemDatabaseFolder = disk + "/Data/PelvisBoneRecon/SystemDataBase/";
-    systemDatabaseFilePath = systemDatabaseFolder + "/SystemDatabase.h5";
-
-    # Initialize system database
-    print("Initialize system data base ...");
-    database = SystemDatabaseManager(systemDatabaseFilePath);
-
-    # Reading initial information
-    print("Reading initial information ...");
-    tempPelvisBoneMuscleMesh = database.readMeshItem("PelvisBoneMuscleTemplateData", "TempPelvisBoneMuscleMesh");
-    augmentingPelvisIDs = sp.readListOfStrings(augmentingPelvisIDFilePath);
-
-    # Forming data for training
-    print("Forming data for training ...");
-    trainingData = [];
-    for i, ID in enumerate(augmentingPelvisIDs):
-        pelvisStructure = database.readMeshItem("PelvicStructureData", ID);
-        pelvisVertices = pelvisStructure.vertices;
-        trainingData.append(pelvisVertices.flatten());
-    trainingData = np.array(trainingData);
-
-    # Train the Gaussian mixture
-    print("Training the Gaussian mixture ..."); 
-    targetNumComps = trainingData.shape[0];
-    pcaModel = PCA(n_components=targetNumComps);
-    reduced_data = pcaModel.fit_transform(trainingData);
-    gaussianMixtureModel = GaussianMixture(n_components=targetNumComps, covariance_type='full');
-    gaussianMixtureModel.fit(reduced_data);
-    dataAugmenter_PCAItemName = f"DataAugmenter_PCAModel_Fold_{validFold}";
-    dataAugmenter_GaussianItemName = f"DataAugmenter_GaussianMixtureModel_Fold_{validFold}";
-
-    # Save the data augmenter to the system database
-    print("Save the data augmented to the system database ...")
-    pelvisAugmenterDataFieldName = "PelvisStructureAugmenter";
-    if (not database.fieldExists(pelvisAugmenterDataFieldName)): database.addField(pelvisAugmenterDataFieldName);
-    if (not database.itemExists(pelvisAugmenterDataFieldName, dataAugmenter_PCAItemName)): 
-        database.addPCAModelItem(pelvisAugmenterDataFieldName, dataAugmenter_PCAItemName, pcaModel);
-    else: 
-        database.updatePCAModelItem(pelvisAugmenterDataFieldName, dataAugmenter_PCAItemName, pcaModel);
-    if (not database.itemExists(pelvisAugmenterDataFieldName, dataAugmenter_GaussianItemName)): 
-        database.addGaussianMixtureModelItem(pelvisAugmenterDataFieldName, dataAugmenter_GaussianItemName, gaussianMixtureModel);
-    else:
-        database.updateGaussianMixtureModelItem(pelvisAugmenterDataFieldName, dataAugmenter_GaussianItemName, gaussianMixtureModel);
-    
-    # Sample to have the new subjects
-    print("Sample to have new subject ...");
-    targetNumOfSubjects = 1000;
-    newReducedData = gaussianMixtureModel.sample(targetNumOfSubjects)[0];
-    augmentedPelvisStructureFieldName = f"AugmentedPelvisStructures_Fold_{validFold}";
-    if (not database.fieldExists(augmentedPelvisStructureFieldName)): database.addField(augmentedPelvisStructureFieldName);
-    for i, newPelvisParams in enumerate(newReducedData):
-        print(i, " ", flush=True, end="");
-        newPelvisParams = newPelvisParams.reshape(1, -1);
-        newPelvisVertices = pcaModel.inverse_transform(newPelvisParams);
-        newPelvisVertices = newPelvisVertices.reshape(-1, 3);
-        newPelvis = sp.cloneMesh(tempPelvisBoneMuscleMesh);
-        newPelvis.vertices = newPelvisVertices;
-
-        pelvisID = f"{i:04d}";
-        if (not database.itemExists(augmentedPelvisStructureFieldName, pelvisID)):
-            database.addMeshItem(augmentedPelvisStructureFieldName, pelvisID, newPelvis);
-        else:
-            database.updateMeshItem(augmentedPelvisStructureFieldName, pelvisID, newPelvis);
-    
-    # Finished processing
-    print("Finished processing.");
-
 #************************** CROSS-VALIDATION FUNCTIONS
 #************* USING AFFINE TRANSFORM FOR BONE AND BONE MUSCLE STRUCTURES
 def featureToPelvisStructureRecon_affineTransform_BoneStructure():
@@ -3458,21 +60,6 @@ def featureToPelvisStructureRecon_affineTransform_BoneStructure():
     - CSV files containing average point-to-point distances for each configuration
     """
 
-    # Initialize command line argument parsing and validate input parameters
-    # Expects: [StartFeatSelStratIndex] [EndFeatSelStratIndex] [StartValidIndex] [EndValidIndex]
-    
-    # Setup file paths and database connections
-    # - System database for storing pelvis structure data
-    # - Cross-validation folders for training/validation splits
-    # - Feature selection protocol definitions
-    # - Output directory for storing computed errors
-    
-    # Load template pelvis bone mesh and compute vertex mapping indices
-    # Template serves as the base mesh that will be deformed to match targets
-    
-    # Load all available feature selection strategies from protocol file
-    # Each strategy defines a subset of anatomical feature points to use
-    
     # Initializing
     print("Initializing ...");
     if (len(sys.argv) < 5):
@@ -3480,30 +67,29 @@ def featureToPelvisStructureRecon_affineTransform_BoneStructure():
         return;
     startFeatSelStratIndex = int(sys.argv[1]); endFeatSelStratIndex = int(sys.argv[2]);
     startValidIndex = int(sys.argv[3]); endValidIndex = int(sys.argv[4]);
-    disk = "H:";
-    debugFolder = disk + r"\Data\PelvisBoneRecon\Debugs";
-    systemDatabaseFolder = disk + "/Data/PelvisBoneRecon/SystemDataBase/"
-    crossValidationFolder = disk + r"/Data/PelvisBoneRecon/CrossValidation";
-    trainValidTestIDFolder = crossValidationFolder + "/TrainingValidTestingIDs";
-    featureSelectionProtocolFolder = crossValidationFolder + "/FeatureSelectionProtocol";    
-    systemDatabaseFilePath = systemDatabaseFolder + "/SystemDatabase.h5";    
-    outFolder = crossValidationFolder + "/AffineDeformation/BoneStructures";
     
-    # Initialize databse
-    print("Initialize database ...");
-    database = SystemDatabaseManager(systemDatabaseFilePath);
+    personalizedPelvicStructureFolder = disk + r"\Data\PelvisBoneRecon\FemalePelvisGeometries\PersonalizedPelvisStructures";
+    templateDataFolder = disk + r"\Data\PelvisBoneRecon\Template\PelvisBonesMuscles";
+    crossValidationFolder = disk + r"\Data\PelvisBoneRecon\CrossValidation";
+    trainValidTestIDFolder = crossValidationFolder + r"\TrainingValidTestingIDs";
+    featureSelectionProtocolFolder = crossValidationFolder + r"\FeatureSelectionProtocol";
+    outFolder = crossValidationFolder + r"\AffineDeformation\BoneStructures";
+
+    # Checking and creating output folder
+    print("Checking and creating output folder ...");
+    if (not os.path.exists(outFolder)): os.makedirs(outFolder);
 
     # Reading initial information
     print("Reading initial information ...");
-    tempPelvisBoneMesh = database.readMeshItem("PelvisBoneMuscleTemplateData", "TempPelvisBoneMesh");
-    tempPelvisBoneMuscleMesh = database.readMeshItem("PelvisBoneMuscleTemplateData", "TempPelvisBoneMuscleMesh");
+    tempPelvisBoneMesh = sp.readMeshFromPLY(templateDataFolder + r"/TempPelvisBoneMesh.ply");
+    tempPelvisBoneMuscleMesh = sp.readMeshFromPLY(templateDataFolder + r"/TempPelvisBoneMuscles.ply");
     pelvisBoneVertexIndices = sp.estimateNearestIndicesKDTreeBased(tempPelvisBoneMesh.vertices, tempPelvisBoneMuscleMesh.vertices);
     
     # Reading feature section strategies
     print("Reading feature selection strategies ...");
-    allPelvicFeatures = sp.read3DPointsFromPPFile(featureSelectionProtocolFolder + "/AllFeaturePoints.pp");
-    featureSelectionStrategyDict = sp.readVectorsFromFile(featureSelectionProtocolFolder + "/FeatureSelectionIndexStrategies.txt");
-    
+    allPelvicFeatures = sp.read3DPointsFromPPFile(featureSelectionProtocolFolder + r"\AllFeaturePoints.pp");
+    featureSelectionStrategyDict = sp.readVectorsFromFile(featureSelectionProtocolFolder + r"\FeatureSelectionIndexStrategies.txt");
+
     # Iterate for each feature selection strategy
     print("Iterate for each feature selection strategy ...");
     for featSelIndex in range(startFeatSelStratIndex, endFeatSelStratIndex + 1):
@@ -3529,7 +115,7 @@ def featureToPelvisStructureRecon_affineTransform_BoneStructure():
             print("\t Forming the training and validating data ...");
             validPelvisBoneVertexData = []; validPelvisFeatureData = [];
             for i, ID in enumerate(validIDs):
-                pelvicStructure = database.readMeshItem("PelvicStructureData", ID);
+                pelvicStructure = sp.readMeshFromPLY(personalizedPelvicStructureFolder + f"/{ID}-PersonalizedPelvisBoneMuscleMesh.ply");
                 pelvisBoneMesh = sp.cloneMesh(tempPelvisBoneMesh);
                 pelvisBoneMesh.vertices = pelvicStructure.vertices[pelvisBoneVertexIndices];
                 pelvicFeatures = sp.reconstructLandmarksFromBarycentric(pelvisBoneMesh, pelvisFeatureBaryIndices, pelvicFeatureBaryCoords);
@@ -3605,23 +191,23 @@ def featureToPelvisStructureRecon_affineTransform_BoneMuscleStructure():
         return;
     startFeatSelStratIndex = int(sys.argv[1]); endFeatSelStratIndex = int(sys.argv[2]);
     startValidIndex = int(sys.argv[3]); endValidIndex = int(sys.argv[4]);
-    disk = "H:";
-    debugFolder = disk + r"\Data\PelvisBoneRecon\Debugs";
-    systemDatabaseFolder = disk + "/Data/PelvisBoneRecon/SystemDataBase/"
-    crossValidationFolder = disk + r"/Data/PelvisBoneRecon/CrossValidation";
-    trainValidTestIDFolder = crossValidationFolder + "/TrainingValidTestingIDs";
-    featureSelectionProtocolFolder = crossValidationFolder + "/FeatureSelectionProtocol";    
-    systemDatabaseFilePath = systemDatabaseFolder + "/SystemDatabase.h5"; 
-    outFolder = crossValidationFolder + "/AffineDeformation/BoneMuscleStructures";
     
-    # Initialize databse
-    print("Initialize database ...");
-    database = SystemDatabaseManager(systemDatabaseFilePath);
+    debugFolder = disk + r"\Data\PelvisBoneRecon\Debugs";
+    personalizedPelvicStructureFolder = disk + r"\Data\PelvisBoneRecon\FemalePelvisGeometries\PersonalizedPelvisStructures";
+    templateDataFolder = disk + r"\Data\PelvisBoneRecon\Template\PelvisBonesMuscles";
+    crossValidationFolder = disk + r"\Data\PelvisBoneRecon\CrossValidation";
+    trainValidTestIDFolder = crossValidationFolder + r"\TrainingValidTestingIDs";
+    featureSelectionProtocolFolder = crossValidationFolder + r"\FeatureSelectionProtocol";
+    outFolder = crossValidationFolder + r"\AffineDeformation\BoneMuscleStructures";
+    
+    # Checking and creating output folder
+    print("Checking and creating output folder ...");
+    if (not os.path.exists(outFolder)): os.makedirs(outFolder);
 
     # Reading initial information
     print("Reading initial information ...");
-    tempPelvisBoneMesh = database.readMeshItem("PelvisBoneMuscleTemplateData", "TempPelvisBoneMesh");
-    tempPelvisBoneMuscleMesh = database.readMeshItem("PelvisBoneMuscleTemplateData", "TempPelvisBoneMuscleMesh");
+    tempPelvisBoneMesh = sp.readMeshFromPLY(templateDataFolder + r"/TempPelvisBoneMesh.ply");
+    tempPelvisBoneMuscleMesh = sp.readMeshFromPLY(templateDataFolder + r"/TempPelvisBoneMuscles.ply");
     pelvisBoneVertexIndices = sp.estimateNearestIndicesKDTreeBased(tempPelvisBoneMesh.vertices, tempPelvisBoneMuscleMesh.vertices);
     
     # Reading feature section strategies
@@ -3654,7 +240,7 @@ def featureToPelvisStructureRecon_affineTransform_BoneMuscleStructure():
             print("\t Forming the training and validating data ...");
             validPelvisBoneMuscleVertexData = []; validPelvisFeatureData = [];
             for i, ID in enumerate(validIDs):
-                pelvisBoneMuscleMesh = database.readMeshItem("PelvicStructureData", ID);
+                pelvisBoneMuscleMesh = sp.readMeshFromPLY(personalizedPelvicStructureFolder + f"/{ID}-PersonalizedPelvisBoneMuscleMesh.ply");
                 pelvicFeatures = sp.reconstructLandmarksFromBarycentric(pelvisBoneMuscleMesh, pelvisFeatureBaryIndices, pelvicFeatureBaryCoords);
                 validPelvisBoneMuscleVertexData.append(pelvisBoneMuscleMesh.vertices.flatten());
                 validPelvisFeatureData.append(pelvicFeatures.flatten());
@@ -3737,8 +323,8 @@ def featureToPelvisStructureRecon_radialBasicFunctionInterpolation_BoneStructure
         return;
     startFeatSelStratIndex = int(sys.argv[1]); endFeatSelStratIndex = int(sys.argv[2]);
     startValidIndex = int(sys.argv[3]); endValidIndex = int(sys.argv[4]);
-    disk = "H:";
-    debugFolder = disk + r"\Data\PelvisBoneRecon\Debugs";
+    personalizedPelvicStructureFolder = disk + r"\Data\PelvisBoneRecon\FemalePelvisGeometries\PersonalizedPelvisStructures";
+    templateDataFolder = disk + r"\Data\PelvisBoneRecon\Template\PelvisBonesMuscles";
     systemDatabaseFolder = disk + "/Data/PelvisBoneRecon/SystemDataBase/"
     crossValidationFolder = disk + r"/Data/PelvisBoneRecon/CrossValidation";
     trainValidTestIDFolder = crossValidationFolder + "/TrainingValidTestingIDs";
@@ -3746,14 +332,14 @@ def featureToPelvisStructureRecon_radialBasicFunctionInterpolation_BoneStructure
     systemDatabaseFilePath = systemDatabaseFolder + "/SystemDatabase.h5";    
     outFolder = crossValidationFolder + "/RadialBasicFunctionStrategy/BoneStructures";
     
-    # Initialize databse
-    print("Initialize database ...");
-    database = SystemDatabaseManager(systemDatabaseFilePath);
+    # Checking and creating output folder
+    print("Checking and creating output folder ...");
+    if (not os.path.exists(outFolder)): os.makedirs(outFolder);
 
     # Reading initial information
     print("Reading initial information ...");
-    tempPelvisBoneMesh = database.readMeshItem("PelvisBoneMuscleTemplateData", "TempPelvisBoneMesh");
-    tempPelvisBoneMuscleMesh = database.readMeshItem("PelvisBoneMuscleTemplateData", "TempPelvisBoneMuscleMesh");
+    tempPelvisBoneMesh = sp.readMeshFromPLY(templateDataFolder + r"/TempPelvisBoneMesh.ply");
+    tempPelvisBoneMuscleMesh = sp.readMeshFromPLY(templateDataFolder + r"/TempPelvisBoneMuscles.ply");
     pelvisBoneVertexIndices = sp.estimateNearestIndicesKDTreeBased(tempPelvisBoneMesh.vertices, tempPelvisBoneMuscleMesh.vertices);
     
     # Reading feature section strategies
@@ -3786,7 +372,7 @@ def featureToPelvisStructureRecon_radialBasicFunctionInterpolation_BoneStructure
             print("\t Forming the training and validating data ...");
             validPelvisBoneVertexData = []; validPelvisFeatureData = [];
             for i, ID in enumerate(validIDs):
-                pelvicStructure = database.readMeshItem("PelvicStructureData", ID);
+                pelvicStructure = sp.readMeshFromPLY(personalizedPelvicStructureFolder + f"/{ID}-PersonalizedPelvisBoneMuscleMesh.ply");
                 pelvisBoneMesh = sp.cloneMesh(tempPelvisBoneMesh);
                 pelvisBoneMesh.vertices = pelvicStructure.vertices[pelvisBoneVertexIndices];
                 pelvicFeatures = sp.reconstructLandmarksFromBarycentric(pelvisBoneMesh, pelvisFeatureBaryIndices, pelvicFeatureBaryCoords);
@@ -3873,23 +459,21 @@ def featureToPelvisStructureRecon_radialBasicFunctionInterpolation_BoneMuscleStr
         return;
     startFeatSelStratIndex = int(sys.argv[1]); endFeatSelStratIndex = int(sys.argv[2]);
     startValidIndex = int(sys.argv[3]); endValidIndex = int(sys.argv[4]);
-    disk = "H:";
-    debugFolder = disk + r"\Data\PelvisBoneRecon\Debugs";
-    systemDatabaseFolder = disk + "/Data/PelvisBoneRecon/SystemDataBase/"
+    personalizedPelvicStructureFolder = disk + r"\Data\PelvisBoneRecon\FemalePelvisGeometries\PersonalizedPelvisStructures";
+    templateDataFolder = disk + r"\Data\PelvisBoneRecon\Template\PelvisBonesMuscles";
     crossValidationFolder = disk + r"/Data/PelvisBoneRecon/CrossValidation";
     trainValidTestIDFolder = crossValidationFolder + "/TrainingValidTestingIDs";
-    featureSelectionProtocolFolder = crossValidationFolder + "/FeatureSelectionProtocol";    
-    systemDatabaseFilePath = systemDatabaseFolder + "/SystemDatabase.h5"; 
+    featureSelectionProtocolFolder = crossValidationFolder + "/FeatureSelectionProtocol";
     outFolder = crossValidationFolder + "/RadialBasicFunctionStrategy/BoneMuscleStructures";
     
-    # Initialize databse
-    print("Initialize database ...");
-    database = SystemDatabaseManager(systemDatabaseFilePath);
+    # Checking and creating output folder
+    print("Checking and creating output folder ...");
+    if (not os.path.exists(outFolder)): os.makedirs(outFolder);
 
     # Reading initial information
     print("Reading initial information ...");
-    tempPelvisBoneMesh = database.readMeshItem("PelvisBoneMuscleTemplateData", "TempPelvisBoneMesh");
-    tempPelvisBoneMuscleMesh = database.readMeshItem("PelvisBoneMuscleTemplateData", "TempPelvisBoneMuscleMesh");
+    tempPelvisBoneMesh = sp.readMeshFromPLY(templateDataFolder + r"/TempPelvisBoneMesh.ply");
+    tempPelvisBoneMuscleMesh = sp.readMeshFromPLY(templateDataFolder + r"/TempPelvisBoneMuscles.ply");
     pelvisBoneVertexIndices = sp.estimateNearestIndicesKDTreeBased(tempPelvisBoneMesh.vertices, tempPelvisBoneMuscleMesh.vertices);
     
     # Reading feature section strategies
@@ -3922,7 +506,7 @@ def featureToPelvisStructureRecon_radialBasicFunctionInterpolation_BoneMuscleStr
             print("\t Forming the training and validating data ...");
             validPelvisBoneMuscleVertexData = []; validPelvisFeatureData = [];
             for i, ID in enumerate(validIDs):
-                pelvisBoneMuscleMesh = database.readMeshItem("PelvicStructureData", ID);
+                pelvisBoneMuscleMesh = sp.readMeshFromPLY(personalizedPelvicStructureFolder + f"/{ID}-PersonalizedPelvisBoneMuscleMesh.ply");
                 pelvicFeatures = sp.reconstructLandmarksFromBarycentric(pelvisBoneMuscleMesh, pelvisFeatureBaryIndices, pelvicFeatureBaryCoords);
                 validPelvisBoneMuscleVertexData.append(pelvisBoneMuscleMesh.vertices.flatten());
                 validPelvisFeatureData.append(pelvicFeatures.flatten());
@@ -4017,15 +601,16 @@ def featureToPelvisStructureRecon_shapeOptimizationStrategy_BoneStructures():
         return;
     startFeatSelStratIndex = int(sys.argv[1]); endFeatSelStratIndex = int(sys.argv[2]);
     startValidIndex = int(sys.argv[3]); endValidIndex = int(sys.argv[4]);
-    startNumComps = int(sys.argv[5]); endNumComps = int(sys.argv[6]);
-    disk = "H:";
-    debugFolder = disk + r"\Data\PelvisBoneRecon\Debugs";
-    systemDatabaseFolder = disk + "/Data/PelvisBoneRecon/SystemDataBase/"
-    crossValidationFolder = disk + r"/Data/PelvisBoneRecon/CrossValidation";
-    trainValidTestIDFolder = crossValidationFolder + "/TrainingValidTestingIDs";
-    featureSelectionProtocolFolder = crossValidationFolder + "/FeatureSelectionProtocol";    
-    systemDatabaseFilePath = systemDatabaseFolder + "/SystemDatabase.h5";    
-    outFolder = crossValidationFolder + "/ShapeOptimizationStrategy/BoneStructures";
+    startNumComps = int(sys.argv[5]); endNumComps = int(sys.argv[6]);    
+    personalizedPelvicStructureFolder = disk + r"\Data\PelvisBoneRecon\FemalePelvisGeometries\PersonalizedPelvisStructures";
+    templateDataFolder = disk + r"\Data\PelvisBoneRecon\Template\PelvisBonesMuscles";
+    crossValidationFolder = disk + r"\Data\PelvisBoneRecon\CrossValidation";
+    trainValidTestIDFolder = crossValidationFolder + r"\TrainingValidTestingIDs";
+    featureSelectionProtocolFolder = crossValidationFolder + r"\FeatureSelectionProtocol";    
+    outFolder = crossValidationFolder + r"\ShapeOptimizationStrategy\BoneStructures";
+
+    # Defining helper functions
+    print("Defining helper functions ...");
     def reconstructPelvisBoneMesh(pcaModel, paramData, meshFaces):
         """Reconstruct pelvis bone mesh vertices from PCA model."""
         meshVertices = pcaModel.inverse_transform(paramData);
@@ -4041,15 +626,15 @@ def featureToPelvisStructureRecon_shapeOptimizationStrategy_BoneStructures():
         reconstructedMesh = reconstructPelvisBoneMesh(pcaModel, initialParams.reshape(1, -1), meshFaces)
         computedFeaturePoints = computeFeaturePoints(reconstructedMesh, baryIndices, baryCoords)
         return (computedFeaturePoints - targetFeaturePoints).flatten();
-
-    # Initialize databse
-    print("Initialize database ...");
-    database = SystemDatabaseManager(systemDatabaseFilePath);
+    
+    # Checking and creating output folder
+    print("Checking and creating output folder ...");
+    if (not os.path.exists(outFolder)): os.makedirs(outFolder);
 
     # Reading initial information
     print("Reading initial information ...");
-    tempPelvisBoneMesh = database.readMeshItem("PelvisBoneMuscleTemplateData", "TempPelvisBoneMesh");
-    tempPelvisBoneMuscleMesh = database.readMeshItem("PelvisBoneMuscleTemplateData", "TempPelvisBoneMuscleMesh");
+    tempPelvisBoneMesh = sp.readMeshFromPLY(templateDataFolder + r"/TempPelvisBoneMesh.ply");
+    tempPelvisBoneMuscleMesh = sp.readMeshFromPLY(templateDataFolder + r"/TempPelvisBoneMuscles.ply");
     pelvisBoneVertexIndices = sp.estimateNearestIndicesKDTreeBased(tempPelvisBoneMesh.vertices, tempPelvisBoneMuscleMesh.vertices);
     
     # Reading feature section strategies
@@ -4084,12 +669,12 @@ def featureToPelvisStructureRecon_shapeOptimizationStrategy_BoneStructures():
             trainPelvisBoneVertexData = []; 
             validPelvisBoneVertexData = []; validPelvisFeatureData = [];
             for i, ID in enumerate(trainIDs):
-                pelvicStructure = database.readMeshItem("PelvicStructureData", ID);
+                pelvicStructure = sp.readMeshFromPLY(personalizedPelvicStructureFolder + f"/{ID}-PersonalizedPelvisBoneMuscleMesh.ply");
                 pelvisBoneMesh = sp.cloneMesh(tempPelvisBoneMesh);
                 pelvisBoneMesh.vertices = pelvicStructure.vertices[pelvisBoneVertexIndices];
                 trainPelvisBoneVertexData.append(pelvisBoneMesh.vertices.flatten());
             for i, ID in enumerate(validIDs):
-                pelvicStructure = database.readMeshItem("PelvicStructureData", ID);
+                pelvicStructure = sp.readMeshFromPLY(personalizedPelvicStructureFolder + f"/{ID}-PersonalizedPelvisBoneMuscleMesh.ply");
                 pelvisBoneMesh = sp.cloneMesh(tempPelvisBoneMesh);
                 pelvisBoneMesh.vertices = pelvicStructure.vertices[pelvisBoneVertexIndices];
                 pelvicFeatures = sp.reconstructLandmarksFromBarycentric(pelvisBoneMesh, pelvicFeatureBaryIndices, pelvicFeatureBaryCoords);
@@ -4180,14 +765,15 @@ def featureToPelvisStructureRecon_shapeOptimizationStrategy_BoneMuscleStructures
     startFeatSelStratIndex = int(sys.argv[1]); endFeatSelStratIndex = int(sys.argv[2]);
     startValidIndex = int(sys.argv[3]); endValidIndex = int(sys.argv[4]);
     startNumComps = int(sys.argv[5]); endNumComps = int(sys.argv[6]);
-    disk = "H:";
-    debugFolder = disk + r"\Data\PelvisBoneRecon\Debugs";
-    systemDatabaseFolder = disk + "/Data/PelvisBoneRecon/SystemDataBase/"
+    personalizedPelvicStructureFolder = disk + r"\Data\PelvisBoneRecon\FemalePelvisGeometries\PersonalizedPelvisStructures";
+    templateDataFolder = disk + r"\Data\PelvisBoneRecon\Template\PelvisBonesMuscles";
     crossValidationFolder = disk + r"/Data/PelvisBoneRecon/CrossValidation";
     trainValidTestIDFolder = crossValidationFolder + "/TrainingValidTestingIDs";
-    featureSelectionProtocolFolder = crossValidationFolder + "/FeatureSelectionProtocol";    
-    systemDatabaseFilePath = systemDatabaseFolder + "/SystemDatabase.h5";
+    featureSelectionProtocolFolder = crossValidationFolder + "/FeatureSelectionProtocol";
     outFolder = crossValidationFolder + "/ShapeOptimizationStrategy/BoneMuscleStructures";
+
+    # Checking and creating output folder
+    print("Checking and creating output folder ...");
     def reconstructPelvisBoneMesh(pcaModel, paramData, meshFaces):
         """Reconstruct pelvis bone mesh vertices from PCA model."""
         meshVertices = pcaModel.inverse_transform(paramData);
@@ -4203,15 +789,15 @@ def featureToPelvisStructureRecon_shapeOptimizationStrategy_BoneMuscleStructures
         reconstructedMesh = reconstructPelvisBoneMesh(pcaModel, initialParams.reshape(1, -1), meshFaces)
         computedFeaturePoints = computeFeaturePoints(reconstructedMesh, baryIndices, baryCoords)
         return (computedFeaturePoints - targetFeaturePoints).flatten();
-
-    # Initialize databse
-    print("Initialize database ...");
-    database = SystemDatabaseManager(systemDatabaseFilePath);
+    
+    # Checking and creating output folder
+    print("Checking and creating output folder ...");
+    if (not os.path.exists(outFolder)): os.makedirs(outFolder);
 
     # Reading initial information
     print("Reading initial information ...");
-    tempPelvisBoneMesh = database.readMeshItem("PelvisBoneMuscleTemplateData", "TempPelvisBoneMesh");
-    tempPelvisBoneMuscleMesh = database.readMeshItem("PelvisBoneMuscleTemplateData", "TempPelvisBoneMuscleMesh");
+    tempPelvisBoneMesh = sp.readMeshFromPLY(templateDataFolder + r"/TempPelvisBoneMesh.ply");
+    tempPelvisBoneMuscleMesh = sp.readMeshFromPLY(templateDataFolder + r"/TempPelvisBoneMuscles.ply");
     pelvisBoneVertexIndices = sp.estimateNearestIndicesKDTreeBased(tempPelvisBoneMesh.vertices, tempPelvisBoneMuscleMesh.vertices);
     
     # Reading feature section strategies
@@ -4246,10 +832,10 @@ def featureToPelvisStructureRecon_shapeOptimizationStrategy_BoneMuscleStructures
             trainPelvisBoneMuscleVertexData = []; 
             validPelvisBoneMuscleVertexData = []; validPelvisFeatureData = [];
             for i, ID in enumerate(trainIDs):
-                pelvicStructure = database.readMeshItem("PelvicStructureData", ID);
+                pelvicStructure = sp.readMeshFromPLY(personalizedPelvicStructureFolder + f"/{ID}-PersonalizedPelvisBoneMuscleMesh.ply");
                 trainPelvisBoneMuscleVertexData.append(pelvicStructure.vertices.flatten());
             for i, ID in enumerate(validIDs):
-                pelvicStructure = database.readMeshItem("PelvicStructureData", ID);
+                pelvicStructure = sp.readMeshFromPLY(personalizedPelvicStructureFolder + f"/{ID}-PersonalizedPelvisBoneMuscleMesh.ply");
                 pelvicFeatures = sp.reconstructLandmarksFromBarycentric(pelvicStructure, pelvicFeatureBaryIndices, pelvicFeatureBaryCoords);
                 validPelvisBoneMuscleVertexData.append(pelvicStructure.vertices.flatten());
                 validPelvisFeatureData.append(pelvicFeatures.flatten());
@@ -4345,26 +931,24 @@ def featureToPelvisStructureRecon_shapeRelationStrategy_BoneStructures():
     startFeatSelStratIndex = int(sys.argv[1]); endFeatSelStratIndex = int(sys.argv[2]);
     startValidIndex = int(sys.argv[3]); endValidIndex = int(sys.argv[4]);
     startNumComps = int(sys.argv[5]); endNumComps = int(sys.argv[6]);
-    disk = "G:";
-    debugFolder = disk + r"\Data\PelvisBoneRecon\Debugs";
-    systemDatabaseFolder = disk + "/Data/PelvisBoneRecon/SystemDataBase/"
+    personalizedPelvicStructureFolder = disk + r"/Data/PelvisBoneRecon/FemalePelvisGeometries/PersonalizedPelvisStructures";
+    templateDataFolder = disk + r"/Data/PelvisBoneRecon/Template/PelvisBonesMuscles";
     crossValidationFolder = disk + r"/Data/PelvisBoneRecon/CrossValidation";
     trainValidTestIDFolder = crossValidationFolder + "/TrainingValidTestingIDs";
-    featureSelectionProtocolFolder = crossValidationFolder + "/FeatureSelectionProtocol";    
-    systemDatabaseFilePath = systemDatabaseFolder + "/SystemDatabase.h5";    
+    featureSelectionProtocolFolder = crossValidationFolder + "/FeatureSelectionProtocol";
     outFolder = crossValidationFolder + "/ShapeRelationStrategy/BoneStructures";
 
-    # Initialize databse
-    print("Initialize database ...");
-    database = SystemDatabaseManager(systemDatabaseFilePath);
+    # Checking and creating output folder
+    print("Checking and creating output folder ...");
+    if (not os.path.exists(outFolder)): os.makedirs(outFolder);
 
     # Reading initial information
     print("Reading initial information ...");
-    tempPelvisBoneMesh = database.readMeshItem("PelvisBoneMuscleTemplateData", "TempPelvisBoneMesh");
-    tempPelvisBoneMuscleMesh = database.readMeshItem("PelvisBoneMuscleTemplateData", "TempPelvisBoneMuscleMesh");
+    tempPelvisBoneMesh = sp.readMeshFromPLY(templateDataFolder + r"/TempPelvisBoneMesh.ply");
+    tempPelvisBoneMuscleMesh = sp.readMeshFromPLY(templateDataFolder + r"/TempPelvisBoneMuscles.ply");
     pelvisBoneVertexIndices = sp.estimateNearestIndicesKDTreeBased(tempPelvisBoneMesh.vertices, tempPelvisBoneMuscleMesh.vertices);
-    
-    # Reading feature section strategies
+
+    # Reading feature selection strategies
     print("Reading feature selection strategies ...");
     allPelvicFeatures = sp.read3DPointsFromPPFile(featureSelectionProtocolFolder + "/AllFeaturePoints.pp");
     featureSelectionStrategyDict = sp.readVectorsFromFile(featureSelectionProtocolFolder + "/FeatureSelectionIndexStrategies.txt");
@@ -4396,14 +980,14 @@ def featureToPelvisStructureRecon_shapeRelationStrategy_BoneStructures():
             trainPelvisBoneVertexData = []; validPelvicVertexData = [];
             trainPelvisFeatureData = []; validPelvicFeatureData = [];
             for i, ID in enumerate(trainIDs):
-                pelvicStructure = database.readMeshItem("PelvicStructureData", ID);
+                pelvicStructure = sp.readMeshFromPLY(personalizedPelvicStructureFolder + f"/{ID}-PersonalizedPelvisBoneMuscleMesh.ply");
                 pelvisBoneMesh = sp.cloneMesh(tempPelvisBoneMesh);
                 pelvisBoneMesh.vertices = pelvicStructure.vertices[pelvisBoneVertexIndices];
                 pelvicFeatures = sp.reconstructLandmarksFromBarycentric(pelvisBoneMesh, pelvicFeatureBaryIndices, pelvicFeatureBaryCoords);
                 trainPelvisBoneVertexData.append(pelvisBoneMesh.vertices.flatten());
                 trainPelvisFeatureData.append(pelvicFeatures.flatten());
             for i, ID in enumerate(validIDs):
-                pelvicStructure = database.readMeshItem("PelvicStructureData", ID);
+                pelvicStructure = sp.readMeshFromPLY(personalizedPelvicStructureFolder + f"/{ID}-PersonalizedPelvisBoneMuscleMesh.ply");
                 pelvisBoneMesh = sp.cloneMesh(tempPelvisBoneMesh);
                 pelvisBoneMesh.vertices = pelvicStructure.vertices[pelvisBoneVertexIndices];
                 pelvicFeatures = sp.reconstructLandmarksFromBarycentric(pelvisBoneMesh, pelvicFeatureBaryIndices, pelvicFeatureBaryCoords);
@@ -4517,24 +1101,22 @@ def featureToPelvisStructureRecon_shapeRelationStrategy_BoneAndMuscleStructures_
         return;
     startFeatSelStratIndex = int(sys.argv[1]); endFeatSelStratIndex = int(sys.argv[2]);
     startValidIndex = int(sys.argv[3]); endValidIndex = int(sys.argv[4]);
-    startNumComps = int(sys.argv[5]); endNumComps = int(sys.argv[6]);
-    disk = "H:";
-    debugFolder = disk + r"\Data\PelvisBoneRecon\Debugs";
-    systemDatabaseFolder = disk + "/Data/PelvisBoneRecon/SystemDataBase/"
+    startNumComps = int(sys.argv[5]); endNumComps = int(sys.argv[6]);    
+    personalizedPelvicStructureFolder = disk + r"/Data/PelvisBoneRecon/FemalePelvisGeometries/PersonalizedPelvisStructures";
+    templateDataFolder = disk + r"/Data/PelvisBoneRecon/Template/PelvisBonesMuscles";
     crossValidationFolder = disk + r"/Data/PelvisBoneRecon/CrossValidation";
     trainValidTestIDFolder = crossValidationFolder + "/TrainingValidTestingIDs";
-    featureSelectionProtocolFolder = crossValidationFolder + "/FeatureSelectionProtocol";    
-    systemDatabaseFilePath = systemDatabaseFolder + "/SystemDatabase.h5";    
+    featureSelectionProtocolFolder = crossValidationFolder + "/FeatureSelectionProtocol";
     outFolder = crossValidationFolder + "/ShapeRelationStrategy/BoneMuscleStructures";
 
-    # Initialize databse
-    print("Initialize database ...");
-    database = SystemDatabaseManager(systemDatabaseFilePath);
+    # Checking and creating output folder
+    print("Checking and creating output folder ...");
+    if (not os.path.exists(outFolder)): os.makedirs(outFolder);
 
     # Reading initial information
     print("Reading initial information ...");
-    tempPelvisBoneMesh = database.readMeshItem("PelvisBoneMuscleTemplateData", "TempPelvisBoneMesh");
-    tempPelvisBoneMuscleMesh = database.readMeshItem("PelvisBoneMuscleTemplateData", "TempPelvisBoneMuscleMesh");
+    tempPelvisBoneMesh = sp.readMeshFromPLY(templateDataFolder + r"/TempPelvisBoneMesh.ply");
+    tempPelvisBoneMuscleMesh = sp.readMeshFromPLY(templateDataFolder + r"/TempPelvisBoneMuscles.ply");
     pelvisBoneVertexIndices = sp.estimateNearestIndicesKDTreeBased(tempPelvisBoneMesh.vertices, tempPelvisBoneMuscleMesh.vertices);
 
     # Reading feature section strategies
@@ -4569,12 +1151,12 @@ def featureToPelvisStructureRecon_shapeRelationStrategy_BoneAndMuscleStructures_
             trainingPelvicVertexData = []; validPelvicVertexData = [];
             trainingPelvicFeatureData = []; validPelvicFeatureData = [];
             for i, ID in enumerate(trainIDs):
-                pelvicStructure = database.readMeshItem("PelvicStructureData", ID);
+                pelvicStructure = sp.readMeshFromPLY(personalizedPelvicStructureFolder + f"/{ID}-PersonalizedPelvisBoneMuscleMesh.ply");
                 pelvicFeatures = sp.reconstructLandmarksFromBarycentric(pelvicStructure, pelvicFeatureBaryIndices, pelvicFeatureBaryCoords);
                 trainingPelvicVertexData.append(pelvicStructure.vertices.flatten());
                 trainingPelvicFeatureData.append(pelvicFeatures.flatten());
             for i, ID in enumerate(validIDs):
-                pelvicStructure = database.readMeshItem("PelvicStructureData", ID);
+                pelvicStructure = sp.readMeshFromPLY(personalizedPelvicStructureFolder + f"/{ID}-PersonalizedPelvisBoneMuscleMesh.ply");
                 pelvicFeatures = sp.reconstructLandmarksFromBarycentric(pelvicStructure, pelvicFeatureBaryIndices, pelvicFeatureBaryCoords);
                 validPelvicVertexData.append(pelvicStructure.vertices.flatten());
                 validPelvicFeatureData.append(pelvicFeatures.flatten());
@@ -4686,24 +1268,22 @@ def featureToPelvisStructureRecon_shapeRelationStrategy_BoneAndMuscleStructures_
         return;
     startFeatSelStratIndex = int(sys.argv[1]); endFeatSelStratIndex = int(sys.argv[2]);
     startValidIndex = int(sys.argv[3]); endValidIndex = int(sys.argv[4]);
-    startNumComps = int(sys.argv[5]); endNumComps = int(sys.argv[6]);
-    disk = "H:";
-    debugFolder = disk + r"\Data\PelvisBoneRecon\Debugs";
-    systemDatabaseFolder = disk + "/Data/PelvisBoneRecon/SystemDataBase/"
+    startNumComps = int(sys.argv[5]); endNumComps = int(sys.argv[6]);    
+    personalizedPelvicStructureFolder = disk + r"/Data/PelvisBoneRecon/FemalePelvisGeometries/PersonalizedPelvisStructures";
+    templateDataFolder = disk + r"/Data/PelvisBoneRecon/Template/PelvisBonesMuscles";
     crossValidationFolder = disk + r"/Data/PelvisBoneRecon/CrossValidation";
     trainValidTestIDFolder = crossValidationFolder + "/TrainingValidTestingIDs";
-    featureSelectionProtocolFolder = crossValidationFolder + "/FeatureSelectionProtocol";    
-    systemDatabaseFilePath = systemDatabaseFolder + "/SystemDatabase.h5";    
+    featureSelectionProtocolFolder = crossValidationFolder + "/FeatureSelectionProtocol";
     outFolder = crossValidationFolder + "/ShapeRelationStrategy/BoneMuscleStructures_RidgeLinearRegression";
 
-    # Initialize databse
-    print("Initialize database ...");
-    database = SystemDatabaseManager(systemDatabaseFilePath);
+    # Checking and creating output folder
+    print("Checking and creating output folder ...");
+    if (not os.path.exists(outFolder)): os.makedirs(outFolder);
 
     # Reading initial information
     print("Reading initial information ...");
-    tempPelvisBoneMesh = database.readMeshItem("PelvisBoneMuscleTemplateData", "TempPelvisBoneMesh");
-    tempPelvisBoneMuscleMesh = database.readMeshItem("PelvisBoneMuscleTemplateData", "TempPelvisBoneMuscleMesh");
+    tempPelvisBoneMesh = sp.readMeshFromPLY(templateDataFolder + "/TempPelvisBoneMesh.ply");
+    tempPelvisBoneMuscleMesh = sp.readMeshFromPLY(templateDataFolder + "/TempPelvisBoneMuscles.ply");
     pelvisBoneVertexIndices = sp.estimateNearestIndicesKDTreeBased(tempPelvisBoneMesh.vertices, tempPelvisBoneMuscleMesh.vertices);
 
     # Reading feature section strategies
@@ -4738,12 +1318,12 @@ def featureToPelvisStructureRecon_shapeRelationStrategy_BoneAndMuscleStructures_
             trainingPelvicVertexData = []; validPelvicVertexData = [];
             trainingPelvicFeatureData = []; validPelvicFeatureData = [];
             for i, ID in enumerate(trainIDs):
-                pelvicStructure = database.readMeshItem("PelvicStructureData", ID);
+                pelvicStructure = sp.readMeshFromPLY(personalizedPelvicStructureFolder + f"/{ID}-PersonalizedPelvisBoneMuscleMesh.ply");
                 pelvicFeatures = sp.reconstructLandmarksFromBarycentric(pelvicStructure, pelvicFeatureBaryIndices, pelvicFeatureBaryCoords);
                 trainingPelvicVertexData.append(pelvicStructure.vertices.flatten());
                 trainingPelvicFeatureData.append(pelvicFeatures.flatten());
             for i, ID in enumerate(validIDs):
-                pelvicStructure = database.readMeshItem("PelvicStructureData", ID);
+                pelvicStructure = sp.readMeshFromPLY(personalizedPelvicStructureFolder + f"/{ID}-PersonalizedPelvisBoneMuscleMesh.ply");
                 pelvicFeatures = sp.reconstructLandmarksFromBarycentric(pelvicStructure, pelvicFeatureBaryIndices, pelvicFeatureBaryCoords);
                 validPelvicVertexData.append(pelvicStructure.vertices.flatten());
                 validPelvicFeatureData.append(pelvicFeatures.flatten());
@@ -4857,24 +1437,22 @@ def featureToPelvisStructureRecon_shapeRelationStrategy_BoneAndMuscleStructures_
         return;
     startFeatSelStratIndex = int(sys.argv[1]); endFeatSelStratIndex = int(sys.argv[2]);
     startValidIndex = int(sys.argv[3]); endValidIndex = int(sys.argv[4]);
-    startNumComps = int(sys.argv[5]); endNumComps = int(sys.argv[6]);
-    disk = "H:";
-    debugFolder = disk + r"\Data\PelvisBoneRecon\Debugs";
-    systemDatabaseFolder = disk + "/Data/PelvisBoneRecon/SystemDataBase/"
+    startNumComps = int(sys.argv[5]); endNumComps = int(sys.argv[6]);    
+    personalizedPelvicStructureFolder = disk + r"/Data/PelvisBoneRecon/FemalePelvisGeometries/PersonalizedPelvisStructures";
+    templateDataFolder = disk + r"/Data/PelvisBoneRecon/Template/PelvisBonesMuscles";
     crossValidationFolder = disk + r"/Data/PelvisBoneRecon/CrossValidation";
     trainValidTestIDFolder = crossValidationFolder + "/TrainingValidTestingIDs";
-    featureSelectionProtocolFolder = crossValidationFolder + "/FeatureSelectionProtocol";    
-    systemDatabaseFilePath = systemDatabaseFolder + "/SystemDatabase.h5";    
+    featureSelectionProtocolFolder = crossValidationFolder + "/FeatureSelectionProtocol";
     outFolder = crossValidationFolder + "/ShapeRelationStrategy/BoneMuscleStructures_CanonicalCorrelationAnalysis";
 
-    # Initialize databse
-    print("Initialize database ...");
-    database = SystemDatabaseManager(systemDatabaseFilePath);
+    # Checking and creating output folder
+    print("Checking and creating output folder ...");
+    if (not os.path.exists(outFolder)): os.makedirs(outFolder);
 
     # Reading initial information
     print("Reading initial information ...");
-    tempPelvisBoneMesh = database.readMeshItem("PelvisBoneMuscleTemplateData", "TempPelvisBoneMesh");
-    tempPelvisBoneMuscleMesh = database.readMeshItem("PelvisBoneMuscleTemplateData", "TempPelvisBoneMuscleMesh");
+    tempPelvisBoneMesh = sp.readMeshFromPLY(templateDataFolder + "/TempPelvisBoneMesh.ply");
+    tempPelvisBoneMuscleMesh = sp.readMeshFromPLY(templateDataFolder + "/TempPelvisBoneMuscleMesh.ply");
     pelvisBoneVertexIndices = sp.estimateNearestIndicesKDTreeBased(tempPelvisBoneMesh.vertices, tempPelvisBoneMuscleMesh.vertices);
 
     # Reading feature section strategies
@@ -4909,12 +1487,12 @@ def featureToPelvisStructureRecon_shapeRelationStrategy_BoneAndMuscleStructures_
             trainingPelvicVertexData = []; validPelvicVertexData = [];
             trainingPelvicFeatureData = []; validPelvicFeatureData = [];
             for i, ID in enumerate(trainIDs):
-                pelvicStructure = database.readMeshItem("PelvicStructureData", ID);
+                pelvicStructure = sp.readMeshFromPLY(personalizedPelvicStructureFolder + f"/{ID}-PersonalizedPelvisBoneMuscleMesh.ply");
                 pelvicFeatures = sp.reconstructLandmarksFromBarycentric(pelvicStructure, pelvicFeatureBaryIndices, pelvicFeatureBaryCoords);
                 trainingPelvicVertexData.append(pelvicStructure.vertices.flatten());
                 trainingPelvicFeatureData.append(pelvicFeatures.flatten());
             for i, ID in enumerate(validIDs):
-                pelvicStructure = database.readMeshItem("PelvicStructureData", ID);
+                pelvicStructure = sp.readMeshFromPLY(personalizedPelvicStructureFolder + f"/{ID}-PersonalizedPelvisBoneMuscleMesh.ply");
                 pelvicFeatures = sp.reconstructLandmarksFromBarycentric(pelvicStructure, pelvicFeatureBaryIndices, pelvicFeatureBaryCoords);
                 validPelvicVertexData.append(pelvicStructure.vertices.flatten());
                 validPelvicFeatureData.append(pelvicFeatures.flatten());
@@ -5032,24 +1610,22 @@ def featureToPelvisStructureRecon_shapeRelationStrategy_BoneAndMuscleStructures_
         return;
     startFeatSelStratIndex = int(sys.argv[1]); endFeatSelStratIndex = int(sys.argv[2]);
     startValidIndex = int(sys.argv[3]); endValidIndex = int(sys.argv[4]);
-    startNumComps = int(sys.argv[5]); endNumComps = int(sys.argv[6]);
-    disk = "H:";
-    debugFolder = disk + r"\Data\PelvisBoneRecon\Debugs";
-    systemDatabaseFolder = disk + "/Data/PelvisBoneRecon/SystemDataBase/"
+    startNumComps = int(sys.argv[5]); endNumComps = int(sys.argv[6]);    
     crossValidationFolder = disk + r"/Data/PelvisBoneRecon/CrossValidation";
     trainValidTestIDFolder = crossValidationFolder + "/TrainingValidTestingIDs";
-    featureSelectionProtocolFolder = crossValidationFolder + "/FeatureSelectionProtocol";    
-    systemDatabaseFilePath = systemDatabaseFolder + "/SystemDatabase.h5";
+    featureSelectionProtocolFolder = crossValidationFolder + "/FeatureSelectionProtocol";
+    personalizedPelvicStructureFolder = disk + r"/Data/PelvisBoneRecon/FemalePelvisGeometries/PersonalizedPelvisStructures";
+    templateDataFolder = disk + r"/Data/PelvisBoneRecon/Template/PelvisBonesMuscles";
     outFolder = crossValidationFolder + "/ShapeRelationStrategy/BoneMuscleStructures_PartialLeastSquaresRegression";
 
-    # Initialize databse
-    print("Initialize database ...");
-    database = SystemDatabaseManager(systemDatabaseFilePath);
+    # Checking and creating output folder
+    print("Checking and creating output folder ...");
+    if (not os.path.exists(outFolder)): os.makedirs(outFolder);
 
     # Reading initial information
     print("Reading initial information ...");
-    tempPelvisBoneMesh = database.readMeshItem("PelvisBoneMuscleTemplateData", "TempPelvisBoneMesh");
-    tempPelvisBoneMuscleMesh = database.readMeshItem("PelvisBoneMuscleTemplateData", "TempPelvisBoneMuscleMesh");
+    tempPelvisBoneMesh = sp.readMeshFromPLY(templateDataFolder + "/TempPelvisBoneMesh.ply");
+    tempPelvisBoneMuscleMesh = sp.readMeshFromPLY(templateDataFolder + "/TempPelvisBoneMuscles.ply");
     pelvisBoneVertexIndices = sp.estimateNearestIndicesKDTreeBased(tempPelvisBoneMesh.vertices, tempPelvisBoneMuscleMesh.vertices);
 
     # Reading feature section strategies
@@ -5084,12 +1660,12 @@ def featureToPelvisStructureRecon_shapeRelationStrategy_BoneAndMuscleStructures_
             trainingPelvicVertexData = []; validPelvicVertexData = [];
             trainingPelvicFeatureData = []; validPelvicFeatureData = [];
             for i, ID in enumerate(trainIDs):
-                pelvicStructure = database.readMeshItem("PelvicStructureData", ID);
+                pelvicStructure = sp.readMeshFromPLY(personalizedPelvicStructureFolder + f"/{ID}-PersonalizedPelvisBoneMuscleMesh.ply");
                 pelvicFeatures = sp.reconstructLandmarksFromBarycentric(pelvicStructure, pelvicFeatureBaryIndices, pelvicFeatureBaryCoords);
                 trainingPelvicVertexData.append(pelvicStructure.vertices.flatten());
                 trainingPelvicFeatureData.append(pelvicFeatures.flatten());
             for i, ID in enumerate(validIDs):
-                pelvicStructure = database.readMeshItem("PelvicStructureData", ID);
+                pelvicStructure = sp.readMeshFromPLY(personalizedPelvicStructureFolder + f"/{ID}-PersonalizedPelvisBoneMuscleMesh.ply");
                 pelvicFeatures = sp.reconstructLandmarksFromBarycentric(pelvicStructure, pelvicFeatureBaryIndices, pelvicFeatureBaryCoords);
                 validPelvicVertexData.append(pelvicStructure.vertices.flatten());
                 validPelvicFeatureData.append(pelvicFeatures.flatten());
@@ -5202,24 +1778,22 @@ def featureToPelvisStructureRecon_shapeRelationStrategy_BoneAndMuscleStructures_
         return;
     startFeatSelStratIndex = int(sys.argv[1]); endFeatSelStratIndex = int(sys.argv[2]);
     startValidIndex = int(sys.argv[3]); endValidIndex = int(sys.argv[4]);
-    startNumComps = int(sys.argv[5]); endNumComps = int(sys.argv[6]);
-    disk = "H:";
-    debugFolder = disk + r"\Data\PelvisBoneRecon\Debugs";
-    systemDatabaseFolder = disk + "/Data/PelvisBoneRecon/SystemDataBase/"
+    startNumComps = int(sys.argv[5]); endNumComps = int(sys.argv[6]);    
+    personalizedPelvicStructureFolder = disk + r"/Data/PelvisBoneRecon/FemalePelvisGeometries/PersonalizedPelvisStructures";
+    templateDataFolder = disk + r"/Data/PelvisBoneRecon/Template/PelvisBonesMuscles";
     crossValidationFolder = disk + r"/Data/PelvisBoneRecon/CrossValidation";
     trainValidTestIDFolder = crossValidationFolder + "/TrainingValidTestingIDs";
-    featureSelectionProtocolFolder = crossValidationFolder + "/FeatureSelectionProtocol";    
-    systemDatabaseFilePath = systemDatabaseFolder + "/SystemDatabase.h5";
+    featureSelectionProtocolFolder = crossValidationFolder + "/FeatureSelectionProtocol";
     outFolder = crossValidationFolder + "/ShapeRelationStrategy/BoneMuscleStructures_GaussianProcessRegressor";
 
-    # Initialize databse
-    print("Initialize database ...");
-    database = SystemDatabaseManager(systemDatabaseFilePath);
+    # Checking and creating output folder
+    print("Checking and creating output folder ...");
+    if (not os.path.exists(outFolder)): os.makedirs(outFolder);
 
     # Reading initial information
     print("Reading initial information ...");
-    tempPelvisBoneMesh = database.readMeshItem("PelvisBoneMuscleTemplateData", "TempPelvisBoneMesh");
-    tempPelvisBoneMuscleMesh = database.readMeshItem("PelvisBoneMuscleTemplateData", "TempPelvisBoneMuscleMesh");
+    tempPelvisBoneMesh = sp.readMeshFromPLY(templateDataFolder + "/TempPelvisBoneMesh.ply");
+    tempPelvisBoneMuscleMesh = sp.readMeshFromPLY(templateDataFolder + "/TempPelvisBoneMuscleMesh.ply");
     pelvisBoneVertexIndices = sp.estimateNearestIndicesKDTreeBased(tempPelvisBoneMesh.vertices, tempPelvisBoneMuscleMesh.vertices);
 
     # Reading feature section strategies
@@ -5254,12 +1828,12 @@ def featureToPelvisStructureRecon_shapeRelationStrategy_BoneAndMuscleStructures_
             trainingPelvicVertexData = []; validPelvicVertexData = [];
             trainingPelvicFeatureData = []; validPelvicFeatureData = [];
             for i, ID in enumerate(trainIDs):
-                pelvicStructure = database.readMeshItem("PelvicStructureData", ID);
+                pelvicStructure = sp.readMeshFromPLY(personalizedPelvicStructureFolder + f"/{ID}-PersonalizedPelvisBoneMuscleMesh.ply");
                 pelvicFeatures = sp.reconstructLandmarksFromBarycentric(pelvicStructure, pelvicFeatureBaryIndices, pelvicFeatureBaryCoords);
                 trainingPelvicVertexData.append(pelvicStructure.vertices.flatten());
                 trainingPelvicFeatureData.append(pelvicFeatures.flatten());
             for i, ID in enumerate(validIDs):
-                pelvicStructure = database.readMeshItem("PelvicStructureData", ID);
+                pelvicStructure = sp.readMeshFromPLY(personalizedPelvicStructureFolder + f"/{ID}-PersonalizedPelvisBoneMuscleMesh.ply");
                 pelvicFeatures = sp.reconstructLandmarksFromBarycentric(pelvicStructure, pelvicFeatureBaryIndices, pelvicFeatureBaryCoords);
                 validPelvicVertexData.append(pelvicStructure.vertices.flatten());
                 validPelvicFeatureData.append(pelvicFeatures.flatten());
@@ -5372,24 +1946,22 @@ def featureToPelvisStructureRecon_shapeRelationStrategy_BoneAndMuscleStructures_
         return;
     startFeatSelStratIndex = int(sys.argv[1]); endFeatSelStratIndex = int(sys.argv[2]);
     startValidIndex = int(sys.argv[3]); endValidIndex = int(sys.argv[4]);
-    startNumComps = int(sys.argv[5]); endNumComps = int(sys.argv[6]);
-    disk = "H:";
-    debugFolder = disk + r"\Data\PelvisBoneRecon\Debugs";
-    systemDatabaseFolder = disk + "/Data/PelvisBoneRecon/SystemDataBase/"
+    startNumComps = int(sys.argv[5]); endNumComps = int(sys.argv[6]);    
+    templateDataFolder = disk + r"/Data/PelvisBoneRecon/Template/PelvisBonesMuscles";
+    personalizedPelvicStructureFolder = disk + r"/Data/PelvisBoneRecon/FemalePelvisGeometries/PersonalizedPelvisStructures";
     crossValidationFolder = disk + r"/Data/PelvisBoneRecon/CrossValidation";
     trainValidTestIDFolder = crossValidationFolder + "/TrainingValidTestingIDs";
-    featureSelectionProtocolFolder = crossValidationFolder + "/FeatureSelectionProtocol";    
-    systemDatabaseFilePath = systemDatabaseFolder + "/SystemDatabase.h5";
+    featureSelectionProtocolFolder = crossValidationFolder + "/FeatureSelectionProtocol";
     outFolder = crossValidationFolder + "/ShapeRelationStrategy/BoneMuscleStructures_MultiOutputRegressor";
 
-    # Initialize databse
-    print("Initialize database ...");
-    database = SystemDatabaseManager(systemDatabaseFilePath);
+    # Checking and creating output folder
+    print("Checking and creating output folder ...");
+    if (not os.path.exists(outFolder)): os.makedirs(outFolder);
 
     # Reading initial information
     print("Reading initial information ...");
-    tempPelvisBoneMesh = database.readMeshItem("PelvisBoneMuscleTemplateData", "TempPelvisBoneMesh");
-    tempPelvisBoneMuscleMesh = database.readMeshItem("PelvisBoneMuscleTemplateData", "TempPelvisBoneMuscleMesh");
+    tempPelvisBoneMesh = sp.readMeshFromPLY(templateDataFolder + "/TempPelvisBoneMesh.ply");
+    tempPelvisBoneMuscleMesh = sp.readMeshFromPLY(templateDataFolder + "/TempPelvisBoneMuscles.ply");
     pelvisBoneVertexIndices = sp.estimateNearestIndicesKDTreeBased(tempPelvisBoneMesh.vertices, tempPelvisBoneMuscleMesh.vertices);
 
     # Reading feature section strategies
@@ -5424,12 +1996,12 @@ def featureToPelvisStructureRecon_shapeRelationStrategy_BoneAndMuscleStructures_
             trainingPelvicVertexData = []; validPelvicVertexData = [];
             trainingPelvicFeatureData = []; validPelvicFeatureData = [];
             for i, ID in enumerate(trainIDs):
-                pelvicStructure = database.readMeshItem("PelvicStructureData", ID);
+                pelvicStructure = sp.readMeshFromPLY(personalizedPelvicStructureFolder + f"/{ID}-PersonalizedPelvisBoneMuscleMesh.ply");
                 pelvicFeatures = sp.reconstructLandmarksFromBarycentric(pelvicStructure, pelvicFeatureBaryIndices, pelvicFeatureBaryCoords);
                 trainingPelvicVertexData.append(pelvicStructure.vertices.flatten());
                 trainingPelvicFeatureData.append(pelvicFeatures.flatten());
             for i, ID in enumerate(validIDs):
-                pelvicStructure = database.readMeshItem("PelvicStructureData", ID);
+                pelvicStructure = sp.readMeshFromPLY(personalizedPelvicStructureFolder + f"/{ID}-PersonalizedPelvisBoneMuscleMesh.ply");
                 pelvicFeatures = sp.reconstructLandmarksFromBarycentric(pelvicStructure, pelvicFeatureBaryIndices, pelvicFeatureBaryCoords);
                 validPelvicVertexData.append(pelvicStructure.vertices.flatten());
                 validPelvicFeatureData.append(pelvicFeatures.flatten());
@@ -5542,11 +2114,9 @@ def featureToPelvisStructureRecon_selectOptimalReconstructionStrategy():
     """
 
     # Initializing
-    print("Initializing ...");
-    disk = "H:";
+    print("Initializing ...");    
     crossValidationFolder = disk + r"/Data/PelvisBoneRecon/CrossValidation";
     featureSelIndex = 10;
-    optimNumCompBoneOptim = 18;
     optimNumCompBoneMuscleOptim = 18;
 
     # Define error drawing function
@@ -6710,8 +3280,7 @@ def featureToPelvisStructureRecon_shapeRelationStrategy_BoneAndMuscleStructures_
     startValidationIndex = int(sys.argv[3]);
     endValidationIndex = int(sys.argv[4]);
     startNumComponents = int(sys.argv[5]);
-    endNumComponents = int(sys.argv[6]);
-    disk = "I:";
+    endNumComponents = int(sys.argv[6]);    
     mainFolder = disk + r"/SpinalPelvisPred";
     pelvisReconFolder = mainFolder + r"/Data/PelvisBoneRecon";
     femalePelvisFolder = pelvisReconFolder + r"/FemalePelvisGeometries";
@@ -6719,7 +3288,6 @@ def featureToPelvisStructureRecon_shapeRelationStrategy_BoneAndMuscleStructures_
     crossValidationFolder = mainFolder + r"/Data/PelvisBoneRecon/CrossValidation/ShapeRelationStrategy/OptimalTrainValidTest";
     trainTestSplitFolder = crossValidationFolder + "/TrainTestSplits";
     validationErrorFolder = crossValidationFolder + "/ValidationErrors";
-    testingErrorFolder = crossValidationFolder + "/TestingErrors";
     featureSelectionProtocolFolder = mainFolder + r"/Data/PelvisBoneRecon/CrossValidation/FeatureSelectionProtocol";
     templateFolder = mainFolder + r"/Data/Template";
 
@@ -6874,8 +3442,7 @@ def featureToPelvisStructureRecon_shapeRelationStrategy_BoneAndMuscleStructures_
     """
 
     # Initializing
-    print("Initializing ...");
-    disk = "I:";
+    print("Initializing ...");    
     mainFolder = disk + r"/SpinalPelvisPred";
     pelvisReconFolder = mainFolder + r"/Data/PelvisBoneRecon";
     crossValidationFolder = pelvisReconFolder + r"/CrossValidation/ShapeRelationStrategy/OptimalTrainValidTest";
@@ -6984,7 +3551,6 @@ def featureToPelvisStructureRecon_shapeRelationStrategy_BoneAndMuscleStructures_
     endFeatureIndex = int(sys.argv[2]);
     startValidationIndex = int(sys.argv[3]);
     endValidationIndex = int(sys.argv[4]);
-    disk = "I:";
     mainFolder = disk + "/SpinalPelvisPred";
     pelvisReconFolder = mainFolder + "/Data/PelvisBoneRecon";
     femalePelvisFolder = pelvisReconFolder + "/FemalePelvisGeometries";
@@ -7172,14 +3738,12 @@ def featureToPelvisStructureRecon_shapeRelationStrategy_BoneAndMuscleStructures_
 
     # Initializing
     print("Initializing ...");
-    disk = "I:";
     mainFolder = disk + "/SpinalPelvisPred";
     pelvisReconFolder = mainFolder + "/Data/PelvisBoneRecon";
     crossValidationFolder = pelvisReconFolder + "/CrossValidation/ShapeRelationStrategy/OptimalTrainValidTest";
     testingErrorFolder = crossValidationFolder + "/TestingErrors";
     featureSelectionProtocolFolder = mainFolder + "/Data/PelvisBoneRecon/CrossValidation/FeatureSelectionProtocol";
     featureSelectionStrategyDict = sp.readVectorsFromFile(featureSelectionProtocolFolder + "/FeatureSelectionIndexStrategies.txt");
-    optimNumComps = sp.readMatrixFromCSVFile(crossValidationFolder + "/OptimalNumComponents.csv");
 
     # Estimate the number of features in each feature selection strategy
     print("Estimating the number of features in each feature selection strategy ...");
@@ -7318,10 +3882,8 @@ def featureToPelvisStructureRecon_shapeRelationStrategy_BoneAndMuscleStructures_
         return;
     startFeatureIndex = int(sys.argv[1]);
     endFeatureIndex = int(sys.argv[2]);
-    disk = "I:";
     mainFolder = disk + "/SpinalPelvisPred";
     pelvisReconFolder = mainFolder + "/Data/PelvisBoneRecon";
-    # debugFolder = pelvisReconFolder + "/Debugs";
     templateFolder = mainFolder + "/Data/Template";
     femalePelvisFolder = pelvisReconFolder + "/FemalePelvisGeometries";
     crossValidationFolder = pelvisReconFolder + "/CrossValidation";
@@ -7356,22 +3918,21 @@ def featureToPelvisStructureRecon_shapeRelationStrategy_BoneAndMuscleStructures_
     templatePelvisMuscleAttachmentPoints = sp.read3DPointsFromPPFile(templateFolder + "/PelvisBonesMuscles/TempPelvisBoneMesh_muscleAttachmentPoints.pp");
     pelvisBoneVertexIndices = sp.estimateNearestIndicesKDTreeBased(templatePelvisBoneMesh.vertices, templatePelvisBoneMuscleMesh.vertices);
     pelvisBoneFeatureBaryCoords, pelvisBoneFeatureBaryIndices = sp.computeBarycentricCoordinates(templatePelvisBoneMesh, templatePelvisFeaturePoints);
-    # muscleAttachmentIndices = estimateMuscleAttachmentIndices(templatePelvisBoneMesh, templatePelvisMuscleAttachmentPoints, 0.006);
+    muscleAttachmentIndices = estimateMuscleAttachmentIndices(templatePelvisBoneMesh, templatePelvisMuscleAttachmentPoints, 0.006);
 
     # Reading template information
     print("Reading template information ...");
     templatePelvisBoneMuscleMesh = sp.readMesh(templateFolder + "/PelvisBonesMuscles/TempPelvisBoneMuscles.ply");
     templatePelvisBoneMesh = sp.readMesh(templateFolder + "/PelvisBonesMuscles/TempPelvisBoneMesh.ply");
-    numOfPelvisBoneVertices = templatePelvisBoneMesh.vertices.shape[0];
 
     # Iterate for each feature selection strategy
     print("Iterating for each feature selection strategy ...");
     for featureSelIndex in range(startFeatureIndex, endFeatureIndex + 1):
         # Generate buffer for saving testing errors
         print("Generate buffer for saving testing errors ...");
-        # meshTestingErrors = np.zeros((numOfValids, numOfTests));
-        # featureTestingErrors = np.zeros((numOfValids, numOfTests));
-        # muscleAttachmentTestingErrors = np.zeros((numOfValids, numOfTests));
+        meshTestingErrors = np.zeros((numOfValids, numOfTests));
+        featureTestingErrors = np.zeros((numOfValids, numOfTests));
+        muscleAttachmentTestingErrors = np.zeros((numOfValids, numOfTests));
 
         ## Iterate for each num of validation
         print("Iterating for each num of validation ...");
@@ -7399,60 +3960,60 @@ def featureToPelvisStructureRecon_shapeRelationStrategy_BoneAndMuscleStructures_
                 gtPersonalizedBoneVertices = gtPersonalizedBoneMuscleMesh.vertices[pelvisBoneVertexIndices];
                 gtPersonalizedBoneMesh = sp.formMesh(gtPersonalizedBoneVertices, templatePelvisBoneMesh.faces);
                 gtBoneMesh = sp.readMesh(femalePelvisFolder + f"/AllPelvicStructures/{testingIDs[testIndex]}-PelvisBoneMesh.ply");
-                # gtPelvisBoneFeatures = sp.reconstructLandmarksFromBarycentric(gtPersonalizedBoneMesh, pelvisBoneFeatureBaryIndices, pelvisBoneFeatureBaryCoords);
+                gtPelvisBoneFeatures = sp.reconstructLandmarksFromBarycentric(gtPersonalizedBoneMesh, pelvisBoneFeatureBaryIndices, pelvisBoneFeatureBaryCoords);
 
                 # Compute predicted information
                 svdTransform = sp.estimateRigidSVDTransform(pdPelvisBoneMuscleMesh.vertices, gtPersonalizedBoneMuscleMesh.vertices);
                 pdPelvisBoneMuscleMesh = sp.transformMesh(pdPelvisBoneMuscleMesh, svdTransform);
-                # pdPelvisBoneFeatures = sp.reconstructLandmarksFromBarycentric(pdPelvisBoneMesh, pelvisBoneFeatureBaryIndices, pelvisBoneFeatureBaryCoords);
+                pdPelvisBoneFeatures = sp.reconstructLandmarksFromBarycentric(pdPelvisBoneMesh, pelvisBoneFeatureBaryIndices, pelvisBoneFeatureBaryCoords);
                 
                 # Compute distances from predicted pelvis mesh to ground truth pelvis mesh
-                # averageMeshDistance = sp.computeAveragePointsToPointsDistance(pdPelvisBoneMesh.vertices, gtBoneMesh.vertices);
+                averageMeshDistance = sp.computeAveragePointsToPointsDistance(pdPelvisBoneMesh.vertices, gtBoneMesh.vertices);
 
                 # Compute distances from predicted pelvis features to ground truth pelvis features
-                # featureDistances = sp.computeCorrespondingDistancesPoints2Points(pdPelvisBoneFeatures, gtPelvisBoneFeatures);
-                # averageFeatureDistance = np.mean(featureDistances);
+                featureDistances = sp.computeCorrespondingDistancesPoints2Points(pdPelvisBoneFeatures, gtPelvisBoneFeatures);
+                averageFeatureDistance = np.mean(featureDistances);
 
                 # Compute distances in muscle attachment points
-                # nearestGtBoneVertexIndices = sp.estimateNearestIndicesKDTreeBased(pdPelvisBoneMesh.vertices, gtBoneMesh.vertices);
-                # nearestGtBoneVertices = gtBoneMesh.vertices[nearestGtBoneVertexIndices];
-                # correspondingDistances = sp.computeCorrespondingDistancesPoints2Points(pdPelvisBoneMesh.vertices, nearestGtBoneVertices);
-                # muscleAttachmentDistances = correspondingDistances[muscleAttachmentIndices];
-                # averageMuscleAttachmentDistance = np.mean(muscleAttachmentDistances);
+                nearestGtBoneVertexIndices = sp.estimateNearestIndicesKDTreeBased(pdPelvisBoneMesh.vertices, gtBoneMesh.vertices);
+                nearestGtBoneVertices = gtBoneMesh.vertices[nearestGtBoneVertexIndices];
+                correspondingDistances = sp.computeCorrespondingDistancesPoints2Points(pdPelvisBoneMesh.vertices, nearestGtBoneVertices);
+                muscleAttachmentDistances = correspondingDistances[muscleAttachmentIndices];
+                averageMuscleAttachmentDistance = np.mean(muscleAttachmentDistances);
 
                 # Compute vertex 2 vertex distances
-                # nearestMeshVertices = sp.estimateNearestPointsFromPoints(pdPelvisBoneMesh.vertices, gtPersonalizedBoneVertices);
-                # vertex2VertexDistances = sp.computeCorrespondingDistancesPoints2Points(pdPelvisBoneMesh.vertices, nearestMeshVertices);
+                nearestMeshVertices = sp.estimateNearestPointsFromPoints(pdPelvisBoneMesh.vertices, gtPersonalizedBoneVertices);
+                vertex2VertexDistances = sp.computeCorrespondingDistancesPoints2Points(pdPelvisBoneMesh.vertices, nearestMeshVertices);
 
                 # Compute vertex 2 vertex mesh distances
-                # nearestMeshVertices = sp.estimateNearestPointsFromPoints(pdPelvisBoneMesh.vertices, gtBoneMesh.vertices);
-                # vertex2VertexMeshDistances = sp.computeCorrespondingDistancesPoints2Points(pdPelvisBoneMesh.vertices, nearestMeshVertices);
+                nearestMeshVertices = sp.estimateNearestPointsFromPoints(pdPelvisBoneMesh.vertices, gtBoneMesh.vertices);
+                vertex2VertexMeshDistances = sp.computeCorrespondingDistancesPoints2Points(pdPelvisBoneMesh.vertices, nearestMeshVertices);
 
                 # Compute vertex 2 vertex bone muscle distances
                 nearestBoneMuscleVertices = sp.estimateNearestPointsFromPoints(pdPelvisBoneMuscleMesh.vertices, gtPersonalizedBoneMuscleMesh.vertices);
                 vertex2VertexBoneMuscleDistances = sp.computeCorrespondingDistancesPoints2Points(pdPelvisBoneMuscleMesh.vertices, nearestBoneMuscleVertices);
 
                 # Save the computed errors to buffers
-                # meshTestingErrors[validIndex, testIndex] = averageMeshDistance;
-                # featureTestingErrors[validIndex, testIndex] = averageFeatureDistance;
-                # muscleAttachmentTestingErrors[validIndex, testIndex] = averageMuscleAttachmentDistance;
-                # vertex2VertexDistanceBuffer.append(vertex2VertexDistances);
-                # vertex2VertexMeshDistanceBuffer.append(vertex2VertexMeshDistances);
+                meshTestingErrors[validIndex, testIndex] = averageMeshDistance;
+                featureTestingErrors[validIndex, testIndex] = averageFeatureDistance;
+                muscleAttachmentTestingErrors[validIndex, testIndex] = averageMuscleAttachmentDistance;
+                vertex2VertexDistanceBuffer.append(vertex2VertexDistances);
+                vertex2VertexMeshDistanceBuffer.append(vertex2VertexMeshDistances);
                 vertex2VertexBoneMuscleDistanceBuffer.append(vertex2VertexBoneMuscleDistances);
         
         # Convert the buffer to numpy array
         print("Converting the buffer to numpy array ...");
-        # vertex2VertexDistanceBuffer = np.array(vertex2VertexDistanceBuffer);
-        # vertex2VertexMeshDistanceBuffer = np.array(vertex2VertexMeshDistanceBuffer);
+        vertex2VertexDistanceBuffer = np.array(vertex2VertexDistanceBuffer);
+        vertex2VertexMeshDistanceBuffer = np.array(vertex2VertexMeshDistanceBuffer);
         vertex2VertexBoneMuscleDistanceBuffer = np.array(vertex2VertexBoneMuscleDistanceBuffer);
 
         # Save the computed errors to files
         print("Saving the computed errors to files ...");
-        # sp.saveMatrixToCSVFile(meshFeatureMuscleErrorFolder + f"/MeshTestingErrors_{featureSelIndex}.csv", meshTestingErrors);
-        # sp.saveMatrixToCSVFile(meshFeatureMuscleErrorFolder + f"/FeatureTestingErrors_{featureSelIndex}.csv", featureTestingErrors);
-        # sp.saveMatrixToCSVFile(meshFeatureMuscleErrorFolder + f"/MuscleAttachmentTestingErrors_{featureSelIndex}.csv", muscleAttachmentTestingErrors);
-        # sp.saveNumPyArrayToNPY(optimalTrainValidTestFolder + f"/Vertex2VertexDistances_{featureSelIndex}.npy", vertex2VertexDistanceBuffer);
-        # sp.saveNumPyArrayToNPY(meshFeatureMuscleErrorFolder + f"/Vertex2VertexMeshDistances_{featureSelIndex}.npy", vertex2VertexMeshDistanceBuffer);
+        sp.saveMatrixToCSVFile(meshFeatureMuscleErrorFolder + f"/MeshTestingErrors_{featureSelIndex}.csv", meshTestingErrors);
+        sp.saveMatrixToCSVFile(meshFeatureMuscleErrorFolder + f"/FeatureTestingErrors_{featureSelIndex}.csv", featureTestingErrors);
+        sp.saveMatrixToCSVFile(meshFeatureMuscleErrorFolder + f"/MuscleAttachmentTestingErrors_{featureSelIndex}.csv", muscleAttachmentTestingErrors);
+        sp.saveNumPyArrayToNPY(optimalTrainValidTestFolder + f"/Vertex2VertexDistances_{featureSelIndex}.npy", vertex2VertexDistanceBuffer);
+        sp.saveNumPyArrayToNPY(meshFeatureMuscleErrorFolder + f"/Vertex2VertexMeshDistances_{featureSelIndex}.npy", vertex2VertexMeshDistanceBuffer);
         sp.saveNumPyArrayToNPY(meshFeatureMuscleErrorFolder + f"/Vertex2VertexBoneMuscleDistances_{featureSelIndex}.npy", vertex2VertexBoneMuscleDistanceBuffer);
 
     # Finished processing
@@ -7533,7 +4094,6 @@ def featureToPelvisStructureRecon_shapeRelationStrategy_BoneAndMuscleStructures_
 
     # Initializing
     print("Initializing ...");
-    disk = "I:";
     mainFolder = disk + "/SpinalPelvisPred";
     pelvisReconFolder = mainFolder + "/Data/PelvisBoneRecon";
     crossValidationFolder = pelvisReconFolder + "/CrossValidation";
@@ -7948,7 +4508,6 @@ def featureToPelvisStructureRecon_shapeRelationStrategy_BoneAndMuscleStructures_
 
     # Initializing
     print("Initializing ...");
-    disk = "I:";
     testingErrorFolder = disk + r"\SpinalPelvisPred\Data\PelvisBoneRecon\CrossValidation\ShapeRelationStrategy\OptimalTrainValidTest\TestingErrors";
     trainTestSplitFolder = disk + r"\SpinalPelvisPred\Data\PelvisBoneRecon\CrossValidation\ShapeRelationStrategy\OptimalTrainValidTest\TrainTestSplits";
     numOfValids = 10;
@@ -8217,7 +4776,6 @@ def featureToPelvisStructureRecon_shapeRelationStrategy_BoneAndMuscleStructures_
         print("Please input the command as: [ProgramName] [FeatureSelIndex]");
         return
     featureSelIndex = int(sys.argv[1]);
-    disk = "I:";
     mainFolder = disk + r"\SpinalPelvisPred\Data\PelvisBoneRecon";
     dicomIllustrationFolder = mainFolder + r"\CrossValidation\ShapeRelationStrategy\OptimalTrainValidTest\DICOMIllustration";
     templateFolder = disk + r"\SpinalPelvisPred\Data\Template\PelvisBonesMuscles";

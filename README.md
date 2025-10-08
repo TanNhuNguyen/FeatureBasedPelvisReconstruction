@@ -25,11 +25,37 @@ This project implements a comprehensive system for reconstructing pelvis bone an
 
 ### Required Dependencies
 
-- [List dependencies here]
+```python
+# Core Scientific Computing
+import numpy as np
+import pandas as pd
+import trimesh
+import matplotlib.pyplot as plt
+
+# Machine Learning Libraries
+from sklearn.decomposition import PCA
+from sklearn.linear_model import LinearRegression, Ridge, RidgeCV
+from sklearn.cross_decomposition import CCA, PLSRegression
+from sklearn.gaussian_process import GaussianProcessRegressor
+from sklearn.multioutput import MultiOutputRegressor
+from sklearn.preprocessing import StandardScaler
+
+# Scientific Computing
+from scipy.interpolate import RBFInterpolator
+from scipy.optimize import least_squares
+from scipy.spatial import KDTree
+
+# System Libraries
+import sys
+import os
+import warnings
+```
 
 ### Additional Requirements
 
-- [List additional requirements here]
+- Custom modules: SupportingTools, VisualInterface, SystemDatabaseManager
+- H5PY for database operations
+- Pymeshlab for mesh processing (optional)
 
 ---
 
@@ -37,208 +63,252 @@ This project implements a comprehensive system for reconstructing pelvis bone an
 
 ### Main Directory Structure
 
+```
+FeatureBasedPelvisReconstruction/
+├── FeatureBasedPelvisReconstruction.py    # Main processing script
+├── SupportingTools/
+│   └── SupportingTools.py                 # Utility functions
+├── Data/
+│   ├── PelvisBoneRecon/
+│   │   ├── FemalePelvisGeometries/        # Contain female pelvis geometries including muscle and bone
+│   │   └── CrossValidation/               # CV data and results
+│   └── Template/                          # Template meshes
+└── README.md
+```
+
 ### Data Folder Organization
 
-**Template Data** (`/Data/Template/PelvisBonesMuscles/`)
+**Cross-Validation Data** (`./Data/PelvisBoneRecon/CrossValidation/`)
+- `TrainingValidTestingIDs/` – Subject ID splits for each fold
+- `FeatureSelectionProtocol/` – Feature selection strategies
+  - `AllFeaturePoints.pp` – Complete anatomical feature points
+  - `FeatureSelectionIndexStrategies.txt` – Feature subset definitions
+- Result folders: `AffineDeformation/`, `RadialBasisFunction/`, `ShapeOptimization/`, `ShapeRelation/`
 
-- `TempPelvisBoneMuscles.ply` – Template bone-muscle mesh  
-- `TempPelvisBoneMesh.ply` – Template bone-only mesh  
-- `TempPelvisMuscles.ply` – Template muscle mesh  
-- `TempPelvisBoneMesh_picked_points.pp` – Anatomical feature points  
-- `TemplatePelvisCoarseShape.ply` – Coarse shape model  
-
-**Cross-Validation Data** (`/Data/PelvisBoneRecon/CrossValidation/`)
-
-- `TrainTestSplits/` – Subject ID splits for each fold  
-- `ValidationErrors/` – Validation error metrics  
-- `TestingErrors/` – Final testing error metrics  
-- `FeatureSelectionProtocol/` – Feature selection strategies  
-
-**Reconstruction Results**
-
-- `PredictedTestingPelvicStructures/` – Predicted mesh outputs  
-- `BestWorstPredictedCases/` – Extreme performance cases  
-- `MeshFeatureMuscleErrors/` – Detailed error analysis  
+**Template Data**
+- `TempPelvisBoneMesh` – Template bone mesh
+- `TempPelvisBoneMuscleMesh` – Template bone-muscle mesh
+- Template feature points and barycentric coordinates
 
 ---
 
 ## Core Functions
 
-### 1. Data Processing Functions
+### 1. Affine Transform-Based Reconstruction
 
-#### `deformTemplatePelvisToTargetPelvis_allData_usingROIFeatureShapeAndMeshDeformation()`
+#### `featureToPelvisStructureRecon_affineTransform_BoneStructure()`
+#### `featureToPelvisStructureRecon_affineTransform_BoneMuscleStructure()`
 
-Generates personalized pelvis structures by deforming template meshes to match target anatomical features.
+Reconstructs pelvis structures using rigid SVD and affine CPD transformations.
 
-**Process:**
-
-- Loads template pelvis bone-muscle structures  
-- Applies rigid SVD + affine CPD transformations  
-- Uses radial basis function interpolation for non-rigid deformation  
-- Processes ROI-specific deformations  
-- Generates subject-specific pelvis muscle structures  
-
-**Inputs:** Template meshes, target feature points, subject pelvis shapes  
-**Outputs:** Personalized pelvis bone-muscle meshes  
-
-#### `prepareTrainingTestingIDs()`
-
-Creates stratified train/validation/test splits for cross-validation.
+**Command Line Usage:**
+```bash
+python script.py [StartFeatSelStratIndex] [EndFeatSelStratIndex] [StartValidIndex] [EndValidIndex]
+```
 
 **Process:**
+1. Load template meshes and feature selection strategies
+2. For each validation fold and feature strategy:
+   - Extract subject pelvis vertices and feature points
+   - Apply rigid SVD transformation for alignment
+   - Apply affine CPD transformation for refinement
+   - Compute reconstruction errors
+3. Save validation results to CSV files
 
-- Loads subject ID list  
-- Generates 10-fold cross-validation splits  
-- Ensures reproducible splits with seed control  
-- Saves ID lists for each fold  
+### 2. Radial Basis Function Interpolation
 
----
+#### `featureToPelvisStructureRecon_radialBasicFunctionInterpolation_BoneStructures()`
+#### `featureToPelvisStructureRecon_radialBasicFunctionInterpolation_BoneMuscleStructures()`
 
-### 2. Feature Selection and Protocol Functions
+Non-rigid deformation using RBF interpolation for smooth anatomical reconstruction.
 
-#### `findROIPelvisFeatureIndices()`
+### 3. Shape Optimization Strategy
 
-Establishes mappings between anatomical features and mesh regions.
+#### `featureToPelvisStructureRecon_shapeOptimizationStrategy_BoneStructures()`
+#### `featureToPelvisStructureRecon_shapeOptimizationStrategy_BoneMuscleStructures()`
 
-**ROI Regions:**
+Optimizes shape parameters to minimize feature reconstruction error.
 
-- Left/Right Ilium  
-- Sacrum  
-- Sacroiliac Joints  
-- Pubic Joint  
+### 4. Shape Relation Strategy (Primary Method)
 
----
+#### Core Training Functions:
+- `featureToPelvisStructureRecon_shapeRelationStrategy_BoneAndMuscleStructures_multivarirateLinearRegression()`
+- `featureToPelvisStructureRecon_shapeRelationStrategy_BoneAndMuscleStructures_RidgeLinearRegression()`
+- `featureToPelvisStructureRecon_shapeRelationStrategy_BoneAndMuscleStructures_CanonicalCorrelationAnalysis()`
+- `featureToPelvisStructureRecon_shapeRelationStrategy_BoneAndMuscleStructures_PartialLeastSquaresRegression()`
+- `featureToPelvisStructureRecon_shapeRelationStrategy_BoneAndMuscleStructures_GaussianProcessRegressor()`
+- `featureToPelvisStructureRecon_shapeRelationStrategy_BoneAndMuscleStructures_MultiOutputRegressor()`
 
-### 3. Reconstruction Strategy Functions
+#### Analysis and Optimization:
+- `featureToPelvisStructureRecon_shapeRelationStrategy_BoneAndMuscleStructures_MultiOutputRegressor_trainValidationVariousFeatures()`
+- `featureToPelvisStructureRecon_shapeRelationStrategy_BoneAndMuscleStructures_MultiOutputRegressor_determineOptimalNumComponents()`
+- `featureToPelvisStructureRecon_shapeRelationStrategy_BoneAndMuscleStructures_MultiOutputRegressor_testUsingOptimalNumComponents()`
 
-#### `featureToPelvisStructureRecon_shapeRelationStrategy_BoneAndMuscleStructures_MultiOutputRegressor_trainValidationVariousFeatures()`
+#### Visualization and Evaluation:
+- `featureToPelvisStructureRecon_shapeRelationStrategy_BoneAndMuscleStructures_MultiOutputRegressor_drawTestingErrors()`
+- `featureToPelvisStructureRecon_shapeRelationStrategy_BoneAndMuscleStructures_MultiOutputRegressor_computeVariousTestingErrors()`
+- `featureToPelvisStructureRecon_shapeRelationStrategy_BoneAndMuscleStructures_MultiOutputRegressor_estimateBestAndWorstPredictedCases()`
+- `featureToPelvisStructureRecon_shapeRelationStrategy_BoneAndMuscleStructures_MultiOutputRegressor_visualizeBestWorstPredictedCases()`
+- `featureToPelvisStructureRecon_shapeRelationStrategy_BoneAndMuscleStructures_MultiOutputRegressor_visualizeBestWorstPredictedCasesWithCTImageScans()`
 
-Trains multi-output ridge regression models across feature selection strategies.
+### 5. Strategy Selection
 
-**Key Parameters:**
+#### `featureToPelvisStructureRecon_selectOptimalReconstructionStrategy()`
 
-- Feature strategies  
-- PCA components: 1–200  
-- Cross-validation: 10-fold  
-
-#### `featureToPelvisStructureRecon_shapeRelationStrategy_BoneAndMuscleStructures_MultiOutputRegressor_testUsingOptimalNumComponents()`
-
-Tests trained models using optimal component configurations.
-
----
-
-### 4. Alternative Reconstruction Strategies
-
-- **Affine Transform Strategy**  
-- **Radial Basis Function Strategy**  
-- **Shape Optimization Strategy**  
-- **Regression Variants:**  
-  - Ridge Linear Regression  
-  - Canonical Correlation Analysis  
-  - Partial Least Squares  
-  - Gaussian Process Regression  
-
----
-
-### 5. Analysis and Visualization Functions
-
-#### `featureToPelvisStructureRecon_shapeRelationStrategy_BoneAndMuscleStructures_MultiOutputRegressor_drawTestingErrors()`
-
-Generates performance visualizations.
-
-#### `featureToPelvisStructureRecon_shapeRelationStrategy_BoneAndMuscleStructures_MultiOutputRegressor_estimateBestAndWorstPredictedCases()`
-
-Identifies performance extremes for detailed analysis.
-
-#### `featureToPelvisStructureRecon_shapeRelationStrategy_BoneAndMuscleStructures_MultiOutputRegressor_visualizeBestWorstPredictedCases()`
-
-3D visualization of extreme performance cases.
+Compares all reconstruction approaches and selects the optimal method based on validation performance.
 
 ---
 
 ## Usage Examples
 
-- Basic Training and Validation  
-- Testing with Optimal Parameters  
-- Generate Personalized Structures  
-- Visualize Results  
+### Basic Training and Validation
+
+```bash
+# Train affine transform models for feature strategies 0-5, validation folds 0-9
+python FeatureBasedPelvisReconstruction.py 0 5 0 9
+
+# Train with different reconstruction strategies
+python FeatureBasedPelvisReconstruction.py 0 10 0 9
+```
+
+### Analysis and Testing
+
+```python
+# Determine optimal PCA components
+featureToPelvisStructureRecon_shapeRelationStrategy_BoneAndMuscleStructures_MultiOutputRegressor_determineOptimalNumComponents()
+
+# Test with optimal parameters
+featureToPelvisStructureRecon_shapeRelationStrategy_BoneAndMuscleStructures_MultiOutputRegressor_testUsingOptimalNumComponents()
+
+# Generate visualizations
+featureToPelvisStructureRecon_shapeRelationStrategy_BoneAndMuscleStructures_MultiOutputRegressor_drawTestingErrors()
+```
+
+---
+
+## Data Organization
+
+### Camera Configuration
+```python
+cameraIntrinsicMatrix = np.array([[1185.7,   0,   960,  0],
+                                  [   0, 1185.7,  540,  0],
+                                  [   0,   0,     1,    0],
+                                  [   0,   0,     0,    1]])
+```
+
+### Key Data Paths
+- **Main Database:** `H:/Data/PelvisBoneRecon/SystemDataBase/SystemDatabase.h5`
+- **Cross-Validation:** `H:/Data/PelvisBoneRecon/CrossValidation/`
+- **Debug Output:** `H:/Data/PelvisBoneRecon/Debugs/`
 
 ---
 
 ## Reconstruction Strategies
 
 ### 1. Affine Transform-based Deformation
-
-- **Pros:** Fast, simple  
-- **Cons:** Limited non-rigid capability  
+- **Method:** Rigid SVD + Affine CPD transformations
+- **Pros:** Fast, robust alignment
+- **Cons:** Limited to linear deformations
+- **Best for:** Initial alignment, coarse reconstruction
 
 ### 2. Radial Basis Function Interpolation
+- **Method:** RBF-based mesh deformation
+- **Pros:** Smooth, non-rigid deformations
+- **Cons:** Computationally intensive
+- **Best for:** Fine anatomical detail preservation
 
-- **Pros:** Smooth deformations  
-- **Cons:** Computationally intensive  
-
-### 3. Statistical Shape Optimization
-
-- **Pros:** Compact representation  
-- **Cons:** Limited to training data  
+### 3. Shape Optimization Strategy
+- **Method:** Parameter optimization with constraints
+- **Pros:** Physics-based, interpretable
+- **Cons:** Local minima, parameter tuning
+- **Best for:** Biomechanically plausible results
 
 ### 4. Shape Relation Strategy (Recommended)
-
-- **Pros:** Robust generalization  
-- **Cons:** Requires training data  
+- **Method:** Statistical learning from training data
+- **Available Models:** Linear, Ridge, CCA, PLS, Gaussian Process, Multi-Output
+- **Pros:** Data-driven, robust generalization
+- **Cons:** Requires substantial training data
+- **Best for:** Production clinical applications
 
 ---
 
 ## Cross-Validation Framework
 
-### Data Splitting Strategy
+### Data Splitting
+- **Training/Validation:** Multiple fold cross-validation
+- **Feature Selection:** Various anatomical landmark subsets
+- **Performance Metrics:** Point-to-point distance, mesh quality
 
-- Training: 70%  
-- Validation: 20%  
-- Testing: 10%  
+### Feature Selection Strategies
+Multiple feature subsets defined in protocol files:
+- Complete anatomical landmarks
+- Region-specific features (ilium, sacrum, joints)
+- Clinically relevant subsets
+- Reduced sets for computational efficiency
 
-### Validation Metrics
-
-- Point-to-Point Distance  
-- Feature Reconstruction Error  
-- Muscle Attachment Error  
-- Mesh-to-Mesh Distance  
+### Validation Process
+1. Load subject IDs for each validation fold
+2. Extract features and mesh vertices for training/validation subjects
+3. Train models using various regression techniques
+4. Evaluate reconstruction accuracy
+5. Select optimal hyperparameters
+6. Test on held-out subjects
 
 ---
 
 ## Visualization Tools
 
 ### 3D Mesh Visualization
+- **Trimesh-based rendering** for interactive viewing
+- **Color-coded error mapping** to highlight reconstruction quality
+- **Side-by-side comparisons** of original vs. reconstructed
+- **Best/worst case visualization** for analysis
 
-- Trimesh Integration  
-- Color Mapping  
-- Comparative Display  
-- Professional Formatting  
+### Statistical Analysis
+- **Error distribution plots** across subjects and methods
+- **Performance comparison charts** between strategies
+- **Cross-validation result summaries**
+- **Component analysis** for optimal dimensionality
 
-### Statistical Charts
-
-- Bar Charts  
-- Line Plots  
-- Trend Analysis  
-- Performance Metrics  
+### Clinical Integration
+- **CT scan overlay visualization** for validation
+- **Multi-modal comparison tools**
+- **Export capabilities** for clinical software
 
 ---
 
 ## Clinical Applications
 
-- Pre-surgical Planning  
-- Biomechanical Analysis  
-- Prosthetic Design  
-- Population Studies  
+### Pre-surgical Planning
+- Patient-specific anatomy reconstruction from limited imaging
+- Surgical approach optimization based on individual anatomy
+- Risk assessment using personalized models
+
+### Biomechanical Analysis
+- Motion simulation with subject-specific geometry
+- Load distribution analysis for implant design
+- Muscle attachment point estimation
+
+### Population Studies
+- Anatomical variation analysis across demographics
+- Disease progression modeling
+- Normal vs. pathological anatomy comparison
 
 ---
 
 ## Quality Assurance
 
-- Error Thresholds: <3mm  
-- Validation Protocols  
-- Performance Monitoring  
-- Case Review  
+### Performance Metrics
+- **Point-to-Point Distance:** Average reconstruction error
+- **Feature Alignment Error:** Landmark-specific accuracy
+- **Mesh Quality:** Surface smoothness and anatomical validity
+- **Clinical Relevance:** Expert evaluation of results
+
+### Validation Standards
+- **Accuracy Threshold:** <3mm average reconstruction error
+- **Cross-Validation:** Statistical significance testing
+- **Independent Testing:** Held-out subject evaluation
+- **Expert Review:** Clinical validation of results
 
 ---
 
@@ -246,19 +316,43 @@ Identifies performance extremes for detailed analysis.
 
 ### Common Issues
 
-- Memory Errors  
-- Convergence Issues  
-- Mesh Quality  
-- Feature Alignment  
+#### Memory Limitations
+- **Symptom:** Out of memory during processing
+- **Solution:** Process in smaller batches, reduce mesh resolution
+- **Prevention:** Monitor system resources, optimize data loading
 
-### Debug Functions
+#### Convergence Problems
+- **Symptom:** Optimization fails to converge
+- **Solution:** Adjust tolerance parameters, validate input data
+- **Prevention:** Check mesh quality, use robust initialization
 
-- [List debug utilities here]
+#### Poor Reconstruction Quality
+- **Symptom:** High reconstruction errors
+- **Solution:** Review feature selection, check template alignment
+- **Prevention:** Validate anatomical landmarks, expert annotation
+
+### System Requirements
+- **Memory:** 16GB+ RAM recommended
+- **Storage:** 50GB+ for full datasets
+- **Processing:** Multi-core CPU beneficial for cross-validation
 
 ---
 
 ## Citation and References
 
-When using this system, please cite the relevant research publications and acknowledge the comprehensive validation framework implemented for pelvis reconstruction applications.
+When using this system, please cite the relevant research publications describing the methodology and validation studies.
 
-> Note: This system is designed for research and educational purposes. Clinical applications require additional validation and regulatory approval.
+### Key References
+- Statistical shape modeling in medical imaging
+- Cross-validation methodologies for anatomical reconstruction
+- Machine learning applications in medical image analysis
+
+---
+
+## License and Disclaimer
+
+This software is provided for research and educational purposes. Clinical applications require additional validation and regulatory approval according to local medical device regulations.
+
+For technical support or collaboration inquiries, please contact the development team.
+
+> **Important:** This system is designed for research purposes only. Users are responsible for ensuring compliance with applicable regulations for clinical use.
