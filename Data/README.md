@@ -92,9 +92,4 @@ Make sure the following Python libraries are installed before running the code:
 
 - `numpy`, `cv2`, `SimpleITK`, `pyvista`, `trimesh`, `scikit-learn`, `matplotlib`, `pydicom`, `pymeshlab`, `tqdm`, `scipy`
 
-You can install them using:
-```bash
-pip install -r requirements.txt
-```
-
 ---

@@ -1,0 +1,15 @@
+numpy
+scipy
+pandas
+matplotlib
+joblib
+opencv-python
+pydicom
+trimesh
+pymeshlab
+open3d
+vtk
+pyvista
+scikit-learn
+tqdm
+PyQt5  # or PySide6 if preferred
