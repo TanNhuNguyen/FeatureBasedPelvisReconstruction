@@ -1,7 +1,5 @@
 License Type: Custom Research-Only License
 
-Copyright (c) 2025 [Your Name or Institution]
-
 This software and associated data are provided under the following terms:
 
 1. **Permitted Use**  
@@ -25,5 +23,3 @@ This software and associated data are provided under the following terms:
 
 6. **Acknowledgment**  
    By using this software and data, you acknowledge that you have read and understood this license and agree to abide by its terms.
-
-For inquiries or permissions beyond this license, please contact: [your.email@domain.com]

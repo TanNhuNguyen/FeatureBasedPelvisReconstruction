@@ -85,11 +85,3 @@ Stores anatomical geometry data for female pelvis models.
 Includes template models and reference geometries used for registration and alignment during reconstruction.
 
 ---
-
-## 🛠 Dependencies
-
-Make sure the following Python libraries are installed before running the code:
-
-- `numpy`, `cv2`, `SimpleITK`, `pyvista`, `trimesh`, `scikit-learn`, `matplotlib`, `pydicom`, `pymeshlab`, `tqdm`, `scipy`
-
----
