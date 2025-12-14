@@ -31,6 +31,255 @@ disk = "H:";
 
 
 #********************************************************** PROCESSING FUNCTIONS
+#************************** DATA PROCESSING FUNCTIONS
+def deformTemplatePelvisToTargetPelvis_allData_usingROIFeatureShapeAndMeshDeformation():
+    # Initializing
+    print("Initializing ...");
+    if (len(sys.argv) < 3):
+        print("\t Please input the command as the following: [ProgramName] [StartIndex] [EndIndex]"); return;
+    startIndex = int(sys.argv[1]); endIndex = int(sys.argv[2]);    
+    processingDisk = "H:/SpinalPelvisPred";
+    templateFolder = processingDisk + "/Data/Template";
+    pelvisBoneMuscleTempFolder = templateFolder + "/PelvisBonesMuscles";
+    pelvisReconFolder = processingDisk +  "/Data/PelvisBoneRecon";
+    targetPelvisFolder = pelvisReconFolder + "/FemalePelvisGeometries/1KPelvisData";
+    debugFolder = processingDisk + "/Data/PelvisBoneRecon/Debugs";
+
+    # Reading processing IDs
+    print("Reading processing IDs ...");
+    processingIDs = sp.readListOfStrings(pelvisReconFolder + "/FemalePelvisGeometries/1KPelvisDataFemalePelvisIDs.txt");
+
+    # Getting template information
+    print("Getting template information ...");
+    tempPelvisBoneMuscleMesh = sp.readMesh(pelvisBoneMuscleTempFolder + "/TempPelvisBoneMuscles.ply");
+    tempPelvisMuscleMesh = sp.readMesh(pelvisBoneMuscleTempFolder + "/TempPelvisMuscles.ply");
+    tempPelvisShape = sp.readMesh(pelvisBoneMuscleTempFolder + "/TemplatePelvisCoarseShape.ply");
+    tempPelvisMesh = sp.readMesh(pelvisBoneMuscleTempFolder + "/TempPelvisBoneMesh.ply");
+    tempWithoutJointPelvisMesh = sp.readMesh(pelvisBoneMuscleTempFolder + "/TempPelvisBoneMeshWithOutJoints.ply");
+    tempLeftIliumMesh = sp.readMesh(pelvisBoneMuscleTempFolder + "/TempPelvisBoneMesh_LeftIlium.ply");
+    tempRightIliumMesh = sp.readMesh(pelvisBoneMuscleTempFolder + "/TempPelvisBoneMesh_RightIlium.ply");
+    tempSacrumMesh = sp.readMesh(pelvisBoneMuscleTempFolder + "/TempPelvisBoneMesh_Sacrum.ply");
+    tempLeftSacroiliacJointMesh = sp.readMesh(pelvisBoneMuscleTempFolder + "/TempPelvisBoneMesh_LeftSacroiliacJoint.ply");
+    tempRightSacroiliacJointMesh = sp.readMesh(pelvisBoneMuscleTempFolder + "/TempPelvisBoneMesh_RightSacroiliacJoint.ply");
+    tempPubicJointMesh = sp.readMesh(pelvisBoneMuscleTempFolder + "/TempPelvisBoneMesh_PubicJoint.ply");
+    
+    tempPelvisFeatures = sp.read3DPointsFromPPFile(pelvisBoneMuscleTempFolder + "/TempPelvisBoneMesh_picked_points.pp");
+    pelvisFeatureBaryIndicesOnShape, pelvisFeatureBaryCoordsOnShape = sp.computeBarycentricLandmarks(tempPelvisShape, tempPelvisFeatures);
+    pelvisFeatureBaryIndicesOnMesh, pelvisFeatureBaryCoordsOnMesh = sp.computeBarycentricLandmarks(tempPelvisMesh, tempPelvisFeatures);
+    
+    leftIliumFeatureIndices = sp.readIndicesFromCSVFile(pelvisBoneMuscleTempFolder + "/LeftIliumFeatureIndices.csv");
+    rightIliumFeatureIndices = sp.readIndicesFromCSVFile(pelvisBoneMuscleTempFolder + "/RightIliumFeatureIndices.csv");
+    sacrumFeatureIndices = sp.readIndicesFromCSVFile(pelvisBoneMuscleTempFolder + "/SacrumFeatureIndices.csv");
+    
+    tempLeftSacroiliacJointFeatures = sp.read3DPointsFromPPFile(pelvisBoneMuscleTempFolder + "/TempPelvisBoneMesh_LeftSacroiliacJoint_picked_points.pp");
+    tempRightSacroiliacJointFeatures = sp.read3DPointsFromPPFile(pelvisBoneMuscleTempFolder + "/TempPelvisBoneMesh_RightSacroiliacJoint_picked_points.pp");
+    tempPubicJointFeatures = sp.read3DPointsFromPPFile(pelvisBoneMuscleTempFolder + "/TempPelvisBoneMesh_PubicJoint_picked_points.pp");
+    tempPelvisMuscleFeatures = sp.read3DPointsFromPPFile(pelvisBoneMuscleTempFolder + "/TempPelvisMuscles_picked_points.pp");
+
+    leftSacroiliacJointFeatureBaryIndices, leftSacroiliacJointFeatureBaryCoords = sp.computeBarycentricLandmarks(tempWithoutJointPelvisMesh, tempLeftSacroiliacJointFeatures);
+    rightSacroiliacJointFeatureBaryIndices, rightSacroiliacJointFeatureBaryCoords = sp.computeBarycentricLandmarks(tempWithoutJointPelvisMesh, tempRightSacroiliacJointFeatures);
+    pubicJointFeatureBaryIndices, pubicJointFeatureBaryCoords = sp.computeBarycentricLandmarks(tempWithoutJointPelvisMesh, tempPubicJointFeatures);
+    pelvisMuscleFeatureBaryIndices, pelvisMuscleFeatureBaryCoords = sp.computeBarycentricLandmarks(tempPelvisMesh, tempPelvisMuscleFeatures);
+    
+    leftSacroiliacJointFeatureBaryIndices = sp.transferFaceIndicesToOtherMesh(leftSacroiliacJointFeatureBaryIndices, tempWithoutJointPelvisMesh, tempPelvisMesh);
+    rightSacroiliacJointFeatureBaryIndices = sp.transferFaceIndicesToOtherMesh(rightSacroiliacJointFeatureBaryIndices, tempWithoutJointPelvisMesh, tempPelvisMesh);
+    pubicJointFeatureBaryIndices = sp.transferFaceIndicesToOtherMesh(pubicJointFeatureBaryIndices, tempWithoutJointPelvisMesh, tempPelvisMesh);
+        
+    pelvisBoneVertexIndices = sp.estimateNearestIndicesKDTreeBased(tempPelvisMesh.vertices, tempPelvisBoneMuscleMesh.vertices);
+    pelvisMuscleVertexIndices = sp.estimateNearestIndicesKDTreeBased(tempPelvisMuscleMesh.vertices, tempPelvisBoneMuscleMesh.vertices);
+    leftIliumVertexIndices = sp.estimateNearestIndicesKDTreeBased(tempLeftIliumMesh.vertices, tempPelvisBoneMuscleMesh.vertices);
+    rightIliumVertexIndices = sp.estimateNearestIndicesKDTreeBased(tempRightIliumMesh.vertices, tempPelvisBoneMuscleMesh.vertices);
+    sacrumVertexIndices = sp.estimateNearestIndicesKDTreeBased(tempSacrumMesh.vertices, tempPelvisBoneMuscleMesh.vertices);
+    leftSacroiliacJointVertexIndices = sp.estimateNearestIndicesKDTreeBased(tempLeftSacroiliacJointMesh.vertices, tempPelvisBoneMuscleMesh.vertices);
+    rightSacroiliacJointVertexIndices = sp.estimateNearestIndicesKDTreeBased(tempRightSacroiliacJointMesh.vertices, tempPelvisBoneMuscleMesh.vertices);
+    pubicJointVertexIndices = sp.estimateNearestIndicesKDTreeBased(tempPubicJointMesh.vertices, tempPelvisBoneMuscleMesh.vertices);    
+    
+    # Checking for each subject
+    print("Checking for each subject ...");
+    for i in range(startIndex, endIndex + 1):
+        # Debugging 
+        sID = processingIDs[i];
+        print("/****************************************** Processing subject: ", i, " with ID: ", sID);
+
+        # Reading target information
+        print("Reading target information ...");
+        targetPelvisShape = sp.readMesh(targetPelvisFolder + f"/{sID}-PelvisBoneShape.ply");
+        targetPelvisMesh = sp.readMesh(targetPelvisFolder + f"/{sID}-PelvisBoneMesh.ply");
+        targetPelvisFeatures = sp.read3DPointsFromPPFile(targetPelvisFolder + f"/{sID}-PelvisBoneMesh_picked_points.pp");
+
+        # Fixing the target information
+        print("Fixing the target information ...");
+        targetPelvisShape = sp.fixMesh(targetPelvisShape);
+        targetPelvisMesh = sp.fixMesh(targetPelvisMesh);
+
+        # Prepare the aligned buffers
+        print("Preparing the aligned buffers ...");
+        alignedPelvisShape = sp.cloneMesh(tempPelvisShape);
+        alignedPelvisFeatures = tempPelvisFeatures.copy();
+        
+        # Deform using the rigid transform 
+        print("Deform using the rigid transform ...");
+        svdTransform = sp.estimateRigidSVDTransform(alignedPelvisFeatures, targetPelvisFeatures);
+        alignedPelvisShape.vertices = sp.transform3DPoints(alignedPelvisShape.vertices, svdTransform);
+        alignedPelvisFeatures = sp.reconstructLandmarksFromBarycentric(alignedPelvisShape, pelvisFeatureBaryIndicesOnShape, pelvisFeatureBaryCoordsOnShape);
+        
+        # Deform with affine transform 
+        print("Deform with affine transform ...");
+        affineTransform = sp.estimateAffineTransformCPD(alignedPelvisFeatures, targetPelvisFeatures);
+        alignedPelvisShape = sp.transformMesh(alignedPelvisShape, affineTransform);
+        del(alignedPelvisFeatures); gc.collect();
+        
+        # Deform using the non-rigid ICP registration
+        print("Deform using the non-rigid ICP registration ...");
+        alignedPelvisShapeVertices = trimesh.registration.nricp_amberg(
+            source_mesh=alignedPelvisShape,
+            target_geometry=targetPelvisShape,
+            source_landmarks=(pelvisFeatureBaryIndicesOnShape, pelvisFeatureBaryCoordsOnShape),
+            target_positions=targetPelvisFeatures
+        )
+        alignedPelvisShape.vertices = alignedPelvisShapeVertices.copy(); 
+        del(alignedPelvisShapeVertices); gc.collect();
+
+        # Project deformed shape to the target shape
+        print("Project deformed shape to the taret shape ...");
+        alignedPelvisShape = sp.projectMeshOntoMesh(alignedPelvisShape, targetPelvisShape);        
+
+        # Deform the template pelvis mesh to def pelvis shape
+        print("Deform template pelvis mesh to def pelvis shape ...");
+        print("\t Using the rigid transform ...");
+        deformedPelvisShape = sp.cloneMesh(tempPelvisShape);
+        deformedPelvisBoneMuscleMesh = sp.cloneMesh(tempPelvisBoneMuscleMesh);
+        svdTransform = sp.estimateRigidSVDTransform(deformedPelvisShape.vertices, alignedPelvisShape.vertices);
+        deformedPelvisShape.vertices = sp.transform3DPoints(deformedPelvisShape.vertices, svdTransform);
+        deformedPelvisBoneMuscleMesh.vertices = sp.transform3DPoints(deformedPelvisBoneMuscleMesh.vertices, svdTransform);
+
+        print("\t Using the non-rigid transform ...");
+        affineTransform = sp.estimateAffineTransformCPD(deformedPelvisShape.vertices, alignedPelvisShape.vertices);
+        deformedPelvisShape.vertices = sp.transform3DPoints(deformedPelvisShape.vertices, affineTransform);
+        deformedPelvisBoneMuscleMesh.vertices = sp.transform3DPoints(deformedPelvisBoneMuscleMesh.vertices, affineTransform);
+
+        print("\t Using the radial basic function ...");
+        deformedToAlignedShapeVertexDisplacements = alignedPelvisShape.vertices - deformedPelvisShape.vertices;
+        rbf = RBFInterpolator(deformedPelvisShape.vertices, deformedToAlignedShapeVertexDisplacements, kernel='thin_plate_spline', smoothing=1e-3);
+        deformedPelvisBoneMuscleVertexDisplacements = rbf(deformedPelvisBoneMuscleMesh.vertices);
+        deformedPelvisBoneMuscleMesh.vertices = deformedPelvisBoneMuscleMesh.vertices + deformedPelvisBoneMuscleVertexDisplacements;
+        del(deformedPelvisShape, deformedToAlignedShapeVertexDisplacements, svdTransform, affineTransform, rbf, deformedPelvisBoneMuscleVertexDisplacements); gc.collect();
+        
+        # Try to deform the pelvis mesh using the ROI shape
+        print("Try to deform the pelvis mesh using the ROI shape ...");
+        ## Getting the ROI meshes
+        print("\t Getting the ROI meshes ...");
+        deformedPelvisMesh = sp.cloneMesh(tempPelvisMesh);
+        deformedPelvisMuscleMesh = sp.cloneMesh(tempPelvisMuscleMesh);
+        deformedLeftIliumMesh = sp.cloneMesh(tempLeftIliumMesh);
+        deformedRightIliumMesh = sp.cloneMesh(tempRightIliumMesh);
+        deformedSacrumMesh = sp.cloneMesh(tempSacrumMesh);
+        deformedLeftSacroiliacJointMesh = sp.cloneMesh(tempLeftSacroiliacJointMesh);
+        deformedRightSacroiliacJointMesh = sp.cloneMesh(tempRightSacroiliacJointMesh);
+        deformedPubicJointMesh = sp.cloneMesh(tempPubicJointMesh);        
+        
+        deformedPelvisMesh.vertices = deformedPelvisBoneMuscleMesh.vertices[pelvisBoneVertexIndices];
+        deformedPelvisMuscleMesh.vertices = deformedPelvisBoneMuscleMesh.vertices[pelvisMuscleVertexIndices];
+        deformedLeftIliumMesh.vertices = deformedPelvisBoneMuscleMesh.vertices[leftIliumVertexIndices];
+        deformedRightIliumMesh.vertices = deformedPelvisBoneMuscleMesh.vertices[rightIliumVertexIndices];
+        deformedSacrumMesh.vertices = deformedPelvisBoneMuscleMesh.vertices[sacrumVertexIndices];
+        deformedLeftSacroiliacJointMesh.vertices = deformedPelvisBoneMuscleMesh.vertices[leftSacroiliacJointVertexIndices];
+        deformedRightSacroiliacJointMesh.vertices = deformedPelvisBoneMuscleMesh.vertices[rightSacroiliacJointVertexIndices];
+        deformedPubicJointMesh.vertices = deformedPelvisBoneMuscleMesh.vertices[pubicJointVertexIndices];
+
+        ## Getting ROI features
+        print("\t Getting the ROI features ...");
+        deformedFullPelvisFeatures = sp.reconstructLandmarksFromBarycentric(deformedPelvisMesh, pelvisFeatureBaryIndicesOnMesh, pelvisFeatureBaryCoordsOnMesh);
+        deformedLeftIliumFeatures = deformedFullPelvisFeatures[leftIliumFeatureIndices];
+        deformedRightIliumFeatures = deformedFullPelvisFeatures[rightIliumFeatureIndices];
+        deformedSacrumFeatures = deformedFullPelvisFeatures[sacrumFeatureIndices];        
+
+        ## Compute bary coords for ROI features
+        print("\t Compute bary coords for ROI features ...");
+        leftIliumFeatureBaryIndices, leftIliumFeatureBaryCoords = sp.computeBarycentricLandmarks(deformedLeftIliumMesh, deformedLeftIliumFeatures);
+        rightIliumFeatureBaryIndices, rightIliumFeatureBaryCoords = sp.computeBarycentricLandmarks(deformedRightIliumMesh, deformedRightIliumFeatures);
+        sacrumFeatureBaryIndices, sacrumFeatureBaryCoords = sp.computeBarycentricLandmarks(deformedSacrumMesh, deformedSacrumFeatures);
+        
+        ## Compute the target ROI features
+        print("\t Compute target ROI features ...");
+        targetLeftIliumFeatures = targetPelvisFeatures[leftIliumFeatureIndices];
+        targetRightIliumFeatures = targetPelvisFeatures[rightIliumFeatureIndices];
+        targetSacrumFeatures = targetPelvisFeatures[sacrumFeatureIndices];
+
+        ## Deform leftIliumMesh to the target mesh
+        print("\t Deform leftIliumMesh to the target mesh ...");
+        personalizedLeftIliumMeshVertices = trimesh.registration.nricp_amberg(
+            source_mesh=deformedLeftIliumMesh,
+            target_geometry=targetPelvisMesh,
+            source_landmarks=(leftIliumFeatureBaryIndices, leftIliumFeatureBaryCoords),
+            target_positions=targetLeftIliumFeatures
+        )
+        personalizedLeftIliumMesh = sp.cloneMesh(deformedLeftIliumMesh);
+        personalizedLeftIliumMesh.vertices = personalizedLeftIliumMeshVertices.copy();
+        del(personalizedLeftIliumMeshVertices); gc.collect();
+
+        ## Deform rightIliumMesh to the target mesh
+        print("\t Deform rightIliumMesh to the target mesh ...");
+        personalizedRightIliumMeshVertices = trimesh.registration.nricp_amberg(
+            source_mesh=deformedRightIliumMesh,
+            target_geometry=targetPelvisMesh,
+            source_landmarks=(rightIliumFeatureBaryIndices, rightIliumFeatureBaryCoords),
+            target_positions=targetRightIliumFeatures
+        )
+        personalizedRightIliumMesh = sp.cloneMesh(deformedRightIliumMesh);
+        personalizedRightIliumMesh.vertices = personalizedRightIliumMeshVertices.copy();
+        del(personalizedRightIliumMeshVertices); gc.collect();
+
+        ## Deform sacrum to the target mesh
+        print("\t Deform sacrum to the target mesh ...");
+        personalizedSacrumMeshVertices = trimesh.registration.nricp_amberg(
+            source_mesh=deformedSacrumMesh,
+            target_geometry=targetPelvisMesh,
+            source_landmarks=(sacrumFeatureBaryIndices, sacrumFeatureBaryCoords),
+            target_positions=targetSacrumFeatures
+        )
+        personalizedSacrumMesh = sp.cloneMesh(deformedSacrumMesh);
+        personalizedSacrumMesh.vertices = personalizedSacrumMeshVertices.copy();
+        del(personalizedSacrumMeshVertices); gc.collect();
+
+        ## Forming personalized pelvis bone muscle mesh
+        print("\t Forming personalized pelvis bone muscle mesh ...");
+        personalizedPelvisBoneMuscleMesh = sp.cloneMesh(deformedPelvisBoneMuscleMesh);
+        personalizedPelvisBoneMuscleMesh.vertices[leftIliumVertexIndices] = personalizedLeftIliumMesh.vertices;
+        personalizedPelvisBoneMuscleMesh.vertices[rightIliumVertexIndices] = personalizedRightIliumMesh.vertices;
+        personalizedPelvisBoneMuscleMesh.vertices[sacrumVertexIndices] = personalizedSacrumMesh.vertices;
+        personalizedPelvisMesh = sp.cloneMesh(deformedPelvisMesh);
+        personalizedPelvisMesh.vertices = personalizedPelvisBoneMuscleMesh.vertices[pelvisBoneVertexIndices];
+
+        # Deform the pelvis muscle
+        print("Deforming the pelvis muscle ...");
+        deformedPelvisMuscleFeatures = sp.reconstructLandmarksFromBarycentric(deformedPelvisMesh, pelvisMuscleFeatureBaryIndices, pelvisMuscleFeatureBaryCoords);
+        personalizedPelvisMusceFeatures = sp.reconstructLandmarksFromBarycentric(personalizedPelvisMesh, pelvisMuscleFeatureBaryIndices, pelvisMuscleFeatureBaryCoords);
+        deformedToPersonalizedPelvisMuscleFeatureDisplacements = personalizedPelvisMusceFeatures - deformedPelvisMuscleFeatures;
+        rbf = RBFInterpolator(deformedPelvisMuscleFeatures, 
+                              deformedToPersonalizedPelvisMuscleFeatureDisplacements, 
+                              kernel='thin_plate_spline', 
+                              smoothing=1e-3);
+        personalizedPelvisMuscleVertexDisplacements = rbf(deformedPelvisMuscleMesh.vertices);
+        personalizedPelvisMuscleMesh = sp.cloneMesh(deformedPelvisMuscleMesh);
+        personalizedPelvisMuscleMesh.vertices = deformedPelvisMuscleMesh.vertices + personalizedPelvisMuscleVertexDisplacements;
+        del(deformedPelvisMuscleFeatures, personalizedPelvisMusceFeatures, deformedToPersonalizedPelvisMuscleFeatureDisplacements, 
+            rbf, personalizedPelvisMuscleVertexDisplacements); gc.collect();
+
+        # Comptue the personalized pelvis muscle meshes
+        print("Computing the personalized pelvis muscle meshes ...");
+        personalizedPelvisBoneMuscleMesh = sp.cloneMesh(deformedPelvisBoneMuscleMesh);
+        personalizedPelvisBoneMuscleMesh.vertices[pelvisBoneVertexIndices] = personalizedPelvisMesh.vertices;
+        personalizedPelvisBoneMuscleMesh.vertices[pelvisMuscleVertexIndices] = personalizedPelvisMuscleMesh.vertices;
+        
+        # Save the personalized results
+        print("Save the personalized results ...");
+        sp.saveMeshToPLY(debugFolder + f"/{sID}-PersonalizedPelvisBoneMuscleMesh.ply", personalizedPelvisBoneMuscleMesh);
+        del(personalizedPelvisBoneMuscleMesh); gc.collect();
+
+    # Finished 
+    print("Finished.");
+    
 #************************** CROSS-VALIDATION FUNCTIONS
 #************* USING AFFINE TRANSFORM FOR BONE AND BONE MUSCLE STRUCTURES
 def featureToPelvisStructureRecon_affineTransform_BoneStructure():
